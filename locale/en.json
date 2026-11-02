@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Compact Arsenal",
+    "description": "Configurable context compaction with three independent sections: whole-context summary, reasoning trimming and tool-output pruning."
+  }
+}

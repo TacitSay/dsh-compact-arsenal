@@ -1,0 +1,8 @@
+# dsh-compact-arsenal bundle patch
+#
+# One row: the Host half of this package. The whole feature set is driven by
+# the row's `config` (see README), and every section defaults to OFF so that
+# installing this bundle changes no behaviour until you opt in.
+- insert:
+    - id: compact-arsenal
+      name: 'dsh-compact-arsenal'

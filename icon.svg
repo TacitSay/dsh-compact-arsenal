@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="t d">
+  <title id="t">Compact Arsenal</title>
+  <desc id="d">Three stacked bars being squeezed into a single shorter stack.</desc>
+  <rect width="64" height="64" rx="14" fill="#eef3ff"/>
+  <g stroke="#1f3a8a" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M14 16h36"/>
+    <path d="M18 27h28"/>
+    <path d="M22 38h20"/>
+  </g>
+  <g fill="#4b6fff">
+    <path d="M18 46l14 8 14-8-14-8z"/>
+  </g>
+  <path d="M32 54v-8" stroke="#1f3a8a" stroke-width="3" stroke-linecap="round"/>
+</svg>
