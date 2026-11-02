@@ -3,7 +3,38 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const { useCallback, useEffect, useRef, useState } = React
+    // The module table may hand back the namespace itself or a default-wrapped
+    // object; resolve hooks from whichever one actually carries them.
+    const hooks = React.useState ? React : (React.default || {})
+    const useState = hooks.useState
+    const useEffect = hooks.useEffect
+    const useRef = hooks.useRef
+    const useCallback = hooks.useCallback
+
+    /** Class boundary: a render failure shows its reason instead of nothing. */
+    const ComponentBase = React.Component || hooks.Component
+    class Boundary extends ComponentBase {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error: String((error && error.message) || error) }
+      }
+
+      render() {
+        if (this.state.error !== null) {
+          return h('div', {
+            style: { padding: '18px 22px', fontSize: 12, lineHeight: 1.7, color: '#d9822b' },
+          }, [
+            h('strong', { key: 't', style: { display: 'block', marginBottom: 6 } }, '压缩面板渲染失败'),
+            h('code', { key: 'm', style: { fontSize: 11 } }, this.state.error),
+          ])
+        }
+        return this.props.children
+      }
+    }
 
     const MUTED = 'rgba(127,127,127,0.75)'
     const LINE = 'rgba(127,127,127,0.26)'
@@ -184,11 +215,43 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    const MODEL_DEFAULT = {
+      provider: '', model: '',
+      prompt: '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。',
+      maxTokens: 512,
+    }
+
     const emptyConfig = {
       enabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      reasoning: { enabled: false, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300 },
-      tools: { enabled: false, thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, onlyTools: [] },
+      total: { enabled: false, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, provider: '', model: '', prompt: '' },
+      reasoning: { enabled: false, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300, model: { ...MODEL_DEFAULT } },
+      tools: { enabled: false, mode: 'truncate', thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, onlyTools: [], model: { ...MODEL_DEFAULT } },
+    }
+
+    /**
+     * Merge any served config onto the complete local shape, so a partial or
+     * older config can never make a section undefined while rendering.
+     * @param {any} served - config from the Host, possibly partial.
+     * @returns {any} a complete config object.
+     */
+    function mergeConfig(served) {
+      const input = served !== null && typeof served === 'object' ? served : {}
+      const section = (base, given) => ({ ...base, ...(given !== null && typeof given === 'object' ? given : {}) })
+      return {
+        ...emptyConfig,
+        ...input,
+        trigger: section(emptyConfig.trigger, input.trigger),
+        total: section(emptyConfig.total, input.total),
+        reasoning: {
+          ...section(emptyConfig.reasoning, input.reasoning),
+          model: section(emptyConfig.reasoning.model, (input.reasoning || {}).model),
+        },
+        tools: {
+          ...section(emptyConfig.tools, input.tools),
+          model: section(emptyConfig.tools.model, (input.tools || {}).model),
+        },
+      }
     }
 
     function Panel() {
@@ -206,8 +269,9 @@ window.__ModuleLoader__.load({
           .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
           .then((body) => {
             if (!alive) return
-            setConfig(body.config)
-            latest.current = body.config
+            const next = mergeConfig(body.config)
+            setConfig(next)
+            latest.current = next
             setStats(body.stats || { reasoning: 0, tools: 0, chars: 0 })
             setStatus(body.editable === false ? 'readonly' : 'ready')
           })
@@ -231,8 +295,9 @@ window.__ModuleLoader__.load({
           })
             .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
             .then((body) => {
-              setConfig(body.config)
-              latest.current = body.config
+              const next = mergeConfig(body.config)
+              setConfig(next)
+              latest.current = next
               if (body.stats) setStats(body.stats)
               setTotalApplied(body.totalApplied === undefined ? null : body.totalApplied)
               setStatus('ready')
@@ -422,7 +487,7 @@ window.__ModuleLoader__.load({
 
       return h('div', {
         style: {
-          height: '100%', overflow: 'auto', padding: '20px 24px',
+          minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
       }, [header, total, reasoning, tools, trigger, safety])
@@ -440,7 +505,7 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main',
           key: 'compact-arsenal',
-        }, Panel))
+        }, () => h(Boundary, null, h(Panel))))
       },
     }
   },
