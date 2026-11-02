@@ -94,16 +94,23 @@ export function normalizeConfig(raw) {
     return next
   }
   const model = (given) => pick(pick(DEFAULTS.reasoning.model, given), given)
+  const reasoningModel = model(input.reasoning?.model)
+  const toolsModel = model(input.tools?.model)
+  const total = pick(DEFAULTS.total, input.total)
+  // An empty prompt means "use the built-in one", never "send nothing".
+  if (!total.prompt) total.prompt = DEFAULT_TOTAL_PROMPT
+  if (!reasoningModel.prompt) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
+  if (!toolsModel.prompt) toolsModel.prompt = DEFAULT_MODEL_PROMPT
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
-    total: pick(DEFAULTS.total, input.total),
+    total,
     reasoning: {
       ...pick(DEFAULTS.reasoning, input.reasoning),
-      model: model(input.reasoning?.model),
+      model: reasoningModel,
     },
     tools: {
       ...pick(DEFAULTS.tools, input.tools),
-      model: model(input.tools?.model),
+      model: toolsModel,
       onlyTools: Array.isArray(input.tools?.onlyTools) ? input.tools.onlyTools.filter((v) => typeof v === 'string') : [],
     },
   }
