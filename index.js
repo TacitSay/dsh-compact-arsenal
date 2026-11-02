@@ -39,34 +39,38 @@ const DEFAULT_TOTAL_PROMPT = '你是压缩引擎。把下面这段对话压缩�
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
   enabled: true,
-  trigger: { pressureRatio: 0.75, runWithoutWindow: false },
   total: {
     enabled: false,
+    pressureRatio: 0.8,
     thresholdRatio: 0.8,
     retainRatio: 0.16,
     maxTokens: 65536,
-    provider: '',
-    model: '',
-    prompt: '',
     retainTurns: 2,
     maxInputChars: 60000,
+    provider: '',
+    model: '',
+    prompt: DEFAULT_TOTAL_PROMPT,
   },
   reasoning: {
     enabled: false,
+    pressureRatio: 0.75,
     mode: 'truncate',
     keepLast: 3,
     minChars: 2000,
     headChars: 600,
     tailChars: 300,
+    maxPerPass: 3,
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
   tools: {
     enabled: false,
+    pressureRatio: 0.75,
     mode: 'truncate',
     thresholdChars: 8192,
     headChars: 4096,
     tailChars: 1024,
     keepLast: 2,
+    maxPerPass: 3,
     onlyTools: [],
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
@@ -92,7 +96,6 @@ export function normalizeConfig(raw) {
   const model = (given) => pick(pick(DEFAULTS.reasoning.model, given), given)
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
-    trigger: pick(DEFAULTS.trigger, input.trigger),
     total: pick(DEFAULTS.total, input.total),
     reasoning: {
       ...pick(DEFAULTS.reasoning, input.reasoning),
@@ -378,11 +381,9 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
 
   if (lastProcessedTurn.get(session.id) === payload.turn) return
 
-  if (!underPressure(ctx, session, config.trigger)) return
-
   lastProcessedTurn.set(session.id, payload.turn)
 
-  if (config.total.enabled) {
+  if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
     await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats)
   }
 
@@ -395,20 +396,26 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
     else if (event?.type === 'tool/result') toolSeqs.push(seq)
   }
 
-  if (config.reasoning.enabled) {
+  if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
+    let done = 0
     for (const seq of dropRecent(assistantSeqs, config.reasoning.keepLast)) {
+      if (done >= (config.reasoning.maxPerPass ?? 3)) break
       const saved = await rewriteAssistant(ctx, session, seq, config.reasoning, payload.signal)
       if (saved > 0) {
+        done += 1
         stats.reasoning += 1
         stats.chars += saved
       }
     }
   }
 
-  if (config.tools.enabled) {
+  if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
+    let done = 0
     for (const seq of dropRecent(toolSeqs, config.tools.keepLast)) {
+      if (done >= (config.tools.maxPerPass ?? 3)) break
       const saved = await rewriteToolResult(ctx, session, seq, config.tools, payload.signal)
       if (saved > 0) {
+        done += 1
         stats.tools += 1
         stats.chars += saved
       }
@@ -417,18 +424,20 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
 }
 
 /**
- * Whether the session is close enough to its limit to justify a rewrite.
+ * Whether one section may act at the current pressure.
  * @param {any} ctx - plugin context.
  * @param {any} session - live session.
- * @param {{ pressureRatio: number, runWithoutWindow: boolean }} trigger - trigger config.
- * @returns {boolean} true when the rewrite may run.
+ * @param {number} ratio - the section's own pressure ratio (0 disables the gate).
+ * @returns {boolean} true when the section may run.
  */
-function underPressure(ctx, session, trigger) {
+function underPressure(ctx, session, ratio) {
   const window = session.requestContext?.()?.contextWindow
-  if (typeof window !== 'number' || window <= 0) return trigger.runWithoutWindow === true
+  if (typeof window !== 'number' || window <= 0) return false
+  const r = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0.75
+  if (r <= 0) return true
   const measured = ctx.tokenMeter?.measure?.(session)
   const total = measured?.totalTokens ?? 0
-  return total >= window * trigger.pressureRatio
+  return total >= window * r
 }
 
 /**
@@ -474,7 +483,7 @@ async function rewriteAssistantAsync(ctx, session, seq, policy, signal) {
     : trimReasoning(message.content, policy)
 
   if (policy.mode === 'model') {
-    next = await rebuildWithModel(ctx, message.content, policy, signal, 'reasoning')
+    next = await rebuildWithModel(ctx, message.content, policy, signal, 'reasoning', session.requestContext?.() ?? {})
   }
   if (next === null) return 0
 
@@ -528,7 +537,7 @@ async function rewriteToolResultAsync(ctx, session, seq, policy, signal) {
 
   let next = pruneToolContent(message.content, policy)
   if (policy.mode === 'model') {
-    next = await rebuildWithModel(ctx, message.content, policy, signal, 'tools')
+    next = await rebuildWithModel(ctx, message.content, policy, signal, 'tools', session.requestContext?.() ?? {})
   }
   if (next === null) return 0
 
@@ -560,7 +569,7 @@ async function rewriteToolResultAsync(ctx, session, seq, policy, signal) {
  * @param {'reasoning' | 'tools'} kind - which section asked.
  * @returns {Promise<any[] | null>} replacement blocks, or `null` when within budget.
  */
-async function rebuildWithModel(ctx, blocks, policy, signal, kind) {
+async function rebuildWithModel(ctx, blocks, policy, signal, kind, routed) {
   const kindOfBlock = kind === 'tools' ? 'text' : 'reasoning'
   const text = blocks.filter((block) => block?.type === kindOfBlock)
     .map((block) => (typeof block.text === 'string' ? block.text : ''))
@@ -568,13 +577,22 @@ async function rebuildWithModel(ctx, blocks, policy, signal, kind) {
   const limit = kind === 'tools' ? policy.thresholdChars : policy.minChars
   if ([...text].length <= limit) return null
 
+  // Already summarized once: never summarize a summary (it would compound).
   const marker = kind === 'tools' ? TOOL_MARKER : REASONING_MARKER
+  if (text.includes(marker.trim())) return null
+
   const mechanical = () => (kind === 'tools' ? pruneToolContent(blocks, policy) : trimReasoning(blocks, policy))
+  const model = policy.model ?? {}
+  const summaryCfg = {
+    ...model,
+    provider: model.provider || (routed && routed.provider) || '',
+    model: model.model || (routed && routed.model) || '',
+  }
 
   try {
     const replaced = await summarizeMiddle(
       ctx,
-      policy.model ?? {},
+      summaryCfg,
       text,
       { headChars: policy.headChars, tailChars: policy.tailChars, marker },
       signal,

@@ -115,10 +115,10 @@ window.__ModuleLoader__.load({
 
     function NumberField(props) {
       return h('label', {
-        style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 120px', minWidth: 110 },
+        style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 130px', minWidth: 0, boxSizing: 'border-box' },
       }, [
         h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, props.label),
-        h('span', { key: 'w', style: { display: 'flex', alignItems: 'center', gap: 6 } }, [
+        h('span', { key: 'w', style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } }, [
           h('input', {
             key: 'i',
             type: 'number',
@@ -130,12 +130,13 @@ window.__ModuleLoader__.load({
               props.onChange(Number.isFinite(next) ? next : 0)
             },
             style: {
-              width: '100%', padding: '5px 8px', borderRadius: 8, fontSize: 12,
+              width: '100%', minWidth: 0, boxSizing: 'border-box',
+              padding: '5px 8px', borderRadius: 8, fontSize: 12,
               border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)',
               color: 'inherit', fontVariantNumeric: 'tabular-nums',
             },
           }),
-          props.suffix ? h('span', { key: 's', style: { fontSize: 11, color: MUTED } }, props.suffix) : null,
+          props.suffix ? h('span', { key: 's', style: { fontSize: 11, color: MUTED, whiteSpace: 'nowrap' } }, props.suffix) : null,
         ]),
       ])
     }
@@ -143,7 +144,11 @@ window.__ModuleLoader__.load({
     function TextField(props) {
       const wide = props.wide === true
       return h('label', {
-        style: { display: 'flex', flexDirection: 'column', gap: 4, flex: wide ? '1 1 100%' : '1 1 160px', minWidth: 140 },
+        style: {
+          display: 'flex', flexDirection: 'column', gap: 4,
+          flex: wide ? '1 1 100%' : '1 1 150px', minWidth: 0, boxSizing: 'border-box',
+          gridColumn: wide ? '1 / -1' : 'auto',
+        },
       }, [
         h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, props.label),
         props.multiline
@@ -179,14 +184,15 @@ window.__ModuleLoader__.load({
       const set = (key, value) => props.onChange({ ...model, [key]: value })
       return h('div', {
         style: {
-          display: 'flex', gap: 10, flexWrap: 'wrap', padding: '10px 12px',
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 10, padding: '10px 12px', boxSizing: 'border-box', width: '100%',
           border: `1px dashed ${LINE}`, borderRadius: 10,
         },
       }, [
-        h('p', { key: 'note', style: { margin: 0, flex: '1 1 100%', fontSize: 11, color: MUTED } },
-          '模型方式会额外调用一次模型，只在压缩触发时发生。留空则退回机械方式。'),
-        h(TextField, { key: 'p', label: '提供方', value: model.provider || '', placeholder: 'ark-plan', onChange: (v) => set('provider', v) }),
-        h(TextField, { key: 'm', label: '模型', value: model.model || '', placeholder: 'deepseek-v4.1-flash', onChange: (v) => set('model', v) }),
+        h('p', { key: 'note', style: { margin: 0, gridColumn: '1 / -1', fontSize: 11, color: MUTED } },
+          '提供方与模型留空时，自动跟随当前会话的模型。'),
+        h(TextField, { key: 'p', label: '提供方', value: model.provider || '', placeholder: '留空 = 当前会话', onChange: (v) => set('provider', v) }),
+        h(TextField, { key: 'm', label: '模型', value: model.model || '', placeholder: '留空 = 当前会话', onChange: (v) => set('model', v) }),
         h(NumberField, { key: 't', label: '输出上限', value: model.maxTokens ?? 512, min: 64, step: 64, suffix: 'token', onChange: (v) => set('maxTokens', v) }),
         h(TextField, { key: 'q', label: '压缩提示词', value: model.prompt || '', multiline: true, wide: true, onChange: (v) => set('prompt', v) }),
       ])
@@ -224,9 +230,9 @@ window.__ModuleLoader__.load({
     const emptyConfig = {
       enabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      total: { enabled: false, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, provider: '', model: '', prompt: '' },
-      reasoning: { enabled: false, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300, model: { ...MODEL_DEFAULT } },
-      tools: { enabled: false, mode: 'truncate', thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, onlyTools: [], model: { ...MODEL_DEFAULT } },
+      total: { enabled: false, pressureRatio: 0.8, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
+      reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300, maxPerPass: 3, model: { ...MODEL_DEFAULT } },
+      tools: { enabled: false, pressureRatio: 0.75, mode: 'truncate', thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, maxPerPass: 3, onlyTools: [], model: { ...MODEL_DEFAULT } },
     }
 
     /**
@@ -336,9 +342,11 @@ window.__ModuleLoader__.load({
         onToggle: (value) => setSection('total', 'enabled', value),
       }, [
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'pr', label: '触发阈值', value: config.total.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('total', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'a', label: '阈值比例', value: config.total.thresholdRatio, min: 0, step: 0.05, onChange: (v) => setSection('total', 'thresholdRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'b', label: '保留比例', value: config.total.retainRatio, min: 0, step: 0.01, onChange: (v) => setSection('total', 'retainRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'c', label: '摘要上限', value: config.total.maxTokens, min: 256, step: 1024, suffix: 'token', onChange: (v) => setSection('total', 'maxTokens', v) }),
+          h(NumberField, { key: 'd', label: '不动最近', value: config.total.retainTurns, min: 0, suffix: '轮', onChange: (v) => setSection('total', 'retainTurns', v) }),
         ]),
         h('div', { key: 'model', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(TextField, { key: 'p', label: '摘要提供方', value: config.total.provider, placeholder: '留空 = 当前会话模型', onChange: (v) => setSection('total', 'provider', v) }),
@@ -386,6 +394,7 @@ window.__ModuleLoader__.load({
           })
           : null,
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'pr', label: '触发阈值', value: config.reasoning.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('reasoning', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.reasoning.minChars, min: 0, step: 100, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
           config.reasoning.mode === 'model'
@@ -428,6 +437,7 @@ window.__ModuleLoader__.load({
           })
           : null,
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'pr', label: '触发阈值', value: config.tools.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('tools', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不改动最近', value: config.tools.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('tools', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.tools.thresholdChars, min: 1, step: 256, suffix: '字符', onChange: (v) => setSection('tools', 'thresholdChars', v) }),
           config.tools.mode === 'model'
@@ -439,22 +449,10 @@ window.__ModuleLoader__.load({
         ]),
       ])
 
-      const trigger = h(Section, {
-        key: 'trigger',
-        title: '触发条件',
-        subtitle: '上下文用到多少才动手；平时完全不动',
-        badge: '',
-      }, [
-        h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
-          h(NumberField, {
-            key: 'r', label: '压力阈值', value: config.trigger.pressureRatio,
-            min: 0, step: 0.05,
-            onChange: (v) => setSection('trigger', 'pressureRatio', Math.min(1, Math.max(0, v))),
-          }),
-        ]),
-        h('p', { key: 'p', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
-          `0.75 表示用到窗口的 75% 才开始压缩。本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次，共省下约 ${stats.chars} 字符。`),
-      ])
+      const statsLine = h('p', {
+        key: 'stats',
+        style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
+      }, `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`)
 
       const statusText = status === 'loading' ? '正在读取配置…'
         : status === 'saving' ? '正在保存…'
@@ -470,7 +468,7 @@ window.__ModuleLoader__.load({
           h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
             h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
             h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
-              '开关即生效，参数改完自动保存。机械方式不调用模型、不花钱。'),
+              '开关即生效，参数改完自动保存。每个板块有自己的触发阈值。'),
           ]),
           h('div', { key: 'master', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
             h('span', { key: 'l', style: { fontSize: 12, color: MUTED } }, '总开关'),
@@ -498,7 +496,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, trigger, total, reasoning, tools, safety])
+      }, [header, total, reasoning, tools, statsLine, safety])
     }
 
     return {
