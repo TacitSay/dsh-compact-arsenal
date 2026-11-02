@@ -33,6 +33,9 @@ export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
 /** Prompt used when a model mode is enabled but the user wrote none. */
 const DEFAULT_MODEL_PROMPT = '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。'
 
+/** Prompt used by the total pass when the user wrote none. */
+const DEFAULT_TOTAL_PROMPT = '你是压缩引擎。把下面这段对话压缩成一份结构化的中文检查点：保留用户目标与偏好、涉及的文件与命令、报错与修法、已完成与待办、下一步。用简短条目，按 ## 标题分节，不要评论，不要提及压缩本身。'
+
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
   enabled: true,
@@ -45,6 +48,8 @@ export const DEFAULTS = Object.freeze({
     provider: '',
     model: '',
     prompt: '',
+    retainTurns: 2,
+    maxInputChars: 60000,
   },
   reasoning: {
     enabled: false,
@@ -242,6 +247,110 @@ function findOwnEntry(configEditor) {
 }
 
 /**
+ * Summarize the oldest closed turns into one checkpoint message.
+ *
+ * This is a surface replacement of whole turns, so tool calls and their
+ * results always leave together and message pairing stays valid. The shipped
+ * backend keeps owning its own trigger; this pass is independent and only
+ * writes when a model actually returns a usable summary.
+ *
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @param {any} total - total section config.
+ * @param {number} turn - the turn that is about to run.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
+ * @returns {Promise<void>} resolves after the optional replacement landed.
+ */
+async function totalPass(ctx, session, total, turn, signal, stats) {
+  const retain = Number.isFinite(total.retainTurns) ? Math.max(0, Math.trunc(total.retainTurns)) : 2
+  const cutoff = turn - retain
+  if (cutoff <= 0) return
+
+  const nodes = []
+  for (const seq of session.surface.nodes) {
+    const event = session.eventAt(seq)
+    if (event === undefined) continue
+    if (event.type === 'system/message' || event.type === 'developer/message') continue
+    const nodeTurn = Number(event.data?.turn)
+    if (!Number.isFinite(nodeTurn) || nodeTurn >= cutoff) continue
+    nodes.push({ seq, event, turn: nodeTurn })
+  }
+  if (nodes.length < 4) return
+
+  const budget = Number.isFinite(total.maxInputChars) ? total.maxInputChars : 60000
+  const picked = []
+  let used = 0
+  for (const node of nodes) {
+    const line = transcriptLine(node.event)
+    if (used + line.length > budget) break
+    used += line.length
+    picked.push(node)
+  }
+  if (picked.length < 4) return
+
+  const transcript = picked.map((node) => transcriptLine(node.event)).join('\n')
+  const routed = session.requestContext?.() ?? {}
+  const summaryCfg = {
+    ...total,
+    provider: total.provider || routed.provider || '',
+    model: total.model || routed.model || '',
+    prompt: total.prompt || DEFAULT_TOTAL_PROMPT,
+  }
+  let summary = ''
+  try {
+    summary = await summarize(ctx, summaryCfg, transcript, signal)
+  } catch (error) {
+    ctx.logger?.warn?.(`[compact-arsenal] total summary skipped: ${error?.message ?? error}`)
+    return
+  }
+  if (summary === '') return
+
+  const startSeq = picked[0].seq
+  const endSeq = picked[picked.length - 1].seq
+  try {
+    session.append(
+      'user/message',
+      {
+        role: 'user',
+        source: { kind: 'user' },
+        content: [{
+          type: 'text',
+          text: `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.\n\n<compacted-summary>\n${summary}\n</compacted-summary>`,
+        }],
+      },
+      { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs: picked.map((node) => node.seq) },
+    )
+    stats.total = (stats.total ?? 0) + 1
+    stats.chars += used
+    ctx.logger?.debug?.(`[compact-arsenal] total: replaced ${picked.length} nodes (-${used} chars)`)
+  } catch (error) {
+    ctx.logger?.warn?.(`[compact-arsenal] total replacement rejected: ${error?.message ?? error}`)
+  }
+}
+
+/**
+ * One readable line for a surface event inside a summary transcript.
+ * @param {any} event - a session event.
+ * @returns {string} role-prefixed text, truncated for tool output.
+ */
+function transcriptLine(event) {
+  const role = event.type === 'user/message' ? 'USER'
+    : event.type === 'assistant/message' ? 'ASSISTANT'
+      : event.type === 'tool/result' ? 'TOOL' : 'CONTEXT'
+  const blocks = event.data?.message?.content
+  const text = Array.isArray(blocks)
+    ? blocks.map((block) => {
+      if (typeof block?.text === 'string') return block.text
+      if (block?.type === 'tool-call') return `→ ${block.name}(${String(block.arguments ?? '').slice(0, 300)})`
+      return ''
+    }).join(' ').trim()
+    : ''
+  const capped = text.length > 800 ? `${text.slice(0, 800)}…` : text
+  return `[${role}] ${capped}`
+}
+
+/**
  * Measure pressure, pick nodes, and append replacements.
  * @param {any} ctx - plugin context.
  * @param {any} config - normalized plugin config.
@@ -262,7 +371,7 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
  * @returns {Promise<void>} resolves when every rewrite of this turn landed.
  */
 async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
-  if (!config.reasoning.enabled && !config.tools.enabled) return
+  if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
 
   const session = ctx.sessions.get(payload.agent.id)
   if (session === undefined) return
@@ -272,6 +381,10 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
   if (!underPressure(ctx, session, config.trigger)) return
 
   lastProcessedTurn.set(session.id, payload.turn)
+
+  if (config.total.enabled) {
+    await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats)
+  }
 
   const nodes = [...session.surface.nodes]
   const assistantSeqs = []

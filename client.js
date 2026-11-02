@@ -388,8 +388,12 @@ window.__ModuleLoader__.load({
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.reasoning.minChars, min: 0, step: 100, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
-          h(NumberField, { key: 'h', label: '保留开头', value: config.reasoning.headChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'headChars', v) }),
-          h(NumberField, { key: 't', label: '保留结尾', value: config.reasoning.tailChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'tailChars', v) }),
+          config.reasoning.mode === 'model'
+            ? null
+            : h(NumberField, { key: 'h', label: '保留开头', value: config.reasoning.headChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'headChars', v) }),
+          config.reasoning.mode === 'model'
+            ? null
+            : h(NumberField, { key: 't', label: '保留结尾', value: config.reasoning.tailChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'tailChars', v) }),
         ]),
       ])
 
@@ -426,8 +430,12 @@ window.__ModuleLoader__.load({
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'k', label: '不改动最近', value: config.tools.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('tools', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.tools.thresholdChars, min: 1, step: 256, suffix: '字符', onChange: (v) => setSection('tools', 'thresholdChars', v) }),
-          h(NumberField, { key: 'h', label: '保留开头', value: config.tools.headChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'headChars', v) }),
-          h(NumberField, { key: 't', label: '保留结尾', value: config.tools.tailChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'tailChars', v) }),
+          config.tools.mode === 'model'
+            ? null
+            : h(NumberField, { key: 'h', label: '保留开头', value: config.tools.headChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'headChars', v) }),
+          config.tools.mode === 'model'
+            ? null
+            : h(NumberField, { key: 't', label: '保留结尾', value: config.tools.tailChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'tailChars', v) }),
         ]),
       ])
 
@@ -490,7 +498,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, total, reasoning, tools, trigger, safety])
+      }, [header, trigger, total, reasoning, tools, safety])
     }
 
     return {
