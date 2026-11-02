@@ -16,21 +16,36 @@
  */
 
 import {
+  REASONING_MARKER,
+  TOOL_MARKER,
   clearReasoning,
   describeChange,
   pruneToolContent,
   trimReasoning,
 } from './lib/policy.js'
+import { summarizeMiddle } from './lib/summarize.js'
 
 export const name = 'compact-arsenal'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
 
+/** Prompt used when a model mode is enabled but the user wrote none. */
+const DEFAULT_MODEL_PROMPT = '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。'
+
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
   enabled: true,
   trigger: { pressureRatio: 0.75, runWithoutWindow: false },
+  total: {
+    enabled: false,
+    thresholdRatio: 0.8,
+    retainRatio: 0.16,
+    maxTokens: 65536,
+    provider: '',
+    model: '',
+    prompt: '',
+  },
   reasoning: {
     enabled: false,
     mode: 'truncate',
@@ -38,14 +53,17 @@ export const DEFAULTS = Object.freeze({
     minChars: 2000,
     headChars: 600,
     tailChars: 300,
+    model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
   tools: {
     enabled: false,
+    mode: 'truncate',
     thresholdChars: 8192,
     headChars: 4096,
     tailChars: 1024,
     keepLast: 2,
     onlyTools: [],
+    model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
 })
 
@@ -56,25 +74,28 @@ export const DEFAULTS = Object.freeze({
  */
 export function normalizeConfig(raw) {
   const input = raw !== null && typeof raw === 'object' ? raw : {}
-  const section = (base, given) => {
+  const pick = (base, given) => {
     const next = { ...base }
-    if (given !== null && typeof given === 'object') {
-      for (const [key, value] of Object.entries(given)) {
-        if (!(key in base)) continue
-        if (base[key] !== null && typeof base[key] === 'object' && !Array.isArray(base[key])) continue
-        if (value === undefined) continue
-        next[key] = value
-      }
+    if (given === null || typeof given !== 'object') return next
+    for (const [key, value] of Object.entries(given)) {
+      if (!(key in base) || value === undefined) continue
+      if (base[key] !== null && typeof base[key] === 'object' && !Array.isArray(base[key])) continue
+      next[key] = value
     }
     return next
   }
+  const model = (given) => pick(pick(DEFAULTS.reasoning.model, given), given)
   return {
-    ...DEFAULTS,
     enabled: input.enabled ?? DEFAULTS.enabled,
-    trigger: section(DEFAULTS.trigger, input.trigger),
-    reasoning: section(DEFAULTS.reasoning, input.reasoning),
+    trigger: pick(DEFAULTS.trigger, input.trigger),
+    total: pick(DEFAULTS.total, input.total),
+    reasoning: {
+      ...pick(DEFAULTS.reasoning, input.reasoning),
+      model: model(input.reasoning?.model),
+    },
     tools: {
-      ...section(DEFAULTS.tools, input.tools),
+      ...pick(DEFAULTS.tools, input.tools),
+      model: model(input.tools?.model),
       onlyTools: Array.isArray(input.tools?.onlyTools) ? input.tools.onlyTools.filter((v) => typeof v === 'string') : [],
     },
   }
@@ -163,8 +184,44 @@ function registerPanelRoutes(ctx, config, stats) {
     } catch (error) {
       return send(res, 500, { error: 'write-failed', message: String(error?.message ?? error) })
     }
-    send(res, 200, { config: next, stats, editable: true })
+    const totalApplied = await applyTotal(configEditor, next.total)
+    send(res, 200, { config: next, stats, editable: true, totalApplied })
   })
+}
+
+/**
+ * Push the total section onto the shipped compaction backend's row.
+ *
+ * The shipped backend owns the summary prompt, so only its trigger, output
+ * budget and summary model are settable here. When the row is not addressable
+ * (for example when an agent preset owns it) this reports `false` instead of
+ * pretending the values were applied.
+ * @param {any} configEditor - the config editor service.
+ * @param {any} total - the total section config.
+ * @returns {Promise<boolean>} whether the backend row accepted the values.
+ */
+async function applyTotal(configEditor, total) {
+  if (!total || total.enabled !== true) return false
+  try {
+    const entries = configEditor.entries()
+    const entry = entries.find((candidate) => {
+      const options = candidate?.options ?? candidate
+      return options?.name === '@deepseek-ai/dsh-compaction-basic' || options?.id === 'compaction-basic'
+    })
+    if (entry === undefined) return false
+    await configEditor.edit(entry, (current) => ({
+      ...current,
+      thresholdRatio: total.thresholdRatio,
+      retainRatio: total.retainRatio,
+      maxTokens: total.maxTokens,
+      ...(typeof total.provider === 'string' && total.provider !== ''
+        ? { summarizationProvider: total.provider, summarizationModel: total.model }
+        : {}),
+    }))
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -192,6 +249,19 @@ function findOwnEntry(configEditor) {
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
  */
 function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
+  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats)
+}
+
+/**
+ * Async body of {@link rewrite}: model modes may await one summarization call.
+ * @param {any} ctx - plugin context.
+ * @param {any} config - normalized plugin config.
+ * @param {{ agent: { id: string }, turn: number, signal?: AbortSignal }} payload - pre-step payload.
+ * @param {Map<string, number>} lastProcessedTurn - per-session guard.
+ * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
+ * @returns {Promise<void>} resolves when every rewrite of this turn landed.
+ */
+async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
   if (!config.reasoning.enabled && !config.tools.enabled) return
 
   const session = ctx.sessions.get(payload.agent.id)
@@ -214,7 +284,7 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
 
   if (config.reasoning.enabled) {
     for (const seq of dropRecent(assistantSeqs, config.reasoning.keepLast)) {
-      const saved = rewriteAssistant(ctx, session, seq, config.reasoning)
+      const saved = await rewriteAssistant(ctx, session, seq, config.reasoning, payload.signal)
       if (saved > 0) {
         stats.reasoning += 1
         stats.chars += saved
@@ -224,7 +294,7 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
 
   if (config.tools.enabled) {
     for (const seq of dropRecent(toolSeqs, config.tools.keepLast)) {
-      const saved = rewriteToolResult(ctx, session, seq, config.tools)
+      const saved = await rewriteToolResult(ctx, session, seq, config.tools, payload.signal)
       if (saved > 0) {
         stats.tools += 1
         stats.chars += saved
@@ -267,15 +337,32 @@ function dropRecent(seqs, keep) {
  * @param {any} policy - reasoning section config.
  * @returns {number} characters removed, or 0 when nothing was rewritten.
  */
-function rewriteAssistant(ctx, session, seq, policy) {
+function rewriteAssistant(ctx, session, seq, policy, signal) {
+  return rewriteAssistantAsync(ctx, session, seq, policy, signal)
+}
+
+/**
+ * Async body of {@link rewriteAssistant}: `model` mode summarizes the elided middle.
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @param {number} seq - surface seq of the assistant message.
+ * @param {any} policy - reasoning section config.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @returns {Promise<number>} characters removed, or 0 when nothing was rewritten.
+ */
+async function rewriteAssistantAsync(ctx, session, seq, policy, signal) {
   const event = session.eventAt(seq)
   if (event === undefined) return 0
   const message = event.data?.message
   if (message?.role !== 'assistant' || !Array.isArray(message.content)) return 0
 
-  const next = policy.mode === 'clear'
+  let next = policy.mode === 'clear'
     ? clearReasoning(message.content)
     : trimReasoning(message.content, policy)
+
+  if (policy.mode === 'model') {
+    next = await rebuildWithModel(ctx, message.content, policy, signal, 'reasoning')
+  }
   if (next === null) return 0
 
   session.append(
@@ -303,7 +390,20 @@ function rewriteAssistant(ctx, session, seq, policy) {
  * @param {any} policy - tools section config.
  * @returns {number} characters removed, or 0 when nothing was rewritten.
  */
-function rewriteToolResult(ctx, session, seq, policy) {
+function rewriteToolResult(ctx, session, seq, policy, signal) {
+  return rewriteToolResultAsync(ctx, session, seq, policy, signal)
+}
+
+/**
+ * Async body of {@link rewriteToolResult}: `model` mode summarizes the elided middle.
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @param {number} seq - surface seq of the tool result.
+ * @param {any} policy - tools section config.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @returns {Promise<number>} characters removed, or 0 when nothing was rewritten.
+ */
+async function rewriteToolResultAsync(ctx, session, seq, policy, signal) {
   const event = session.eventAt(seq)
   if (event === undefined) return 0
   const message = event.data?.message
@@ -313,7 +413,10 @@ function rewriteToolResult(ctx, session, seq, policy) {
     if (toolName === undefined || !policy.onlyTools.includes(toolName)) return 0
   }
 
-  const next = pruneToolContent(message.content, policy)
+  let next = pruneToolContent(message.content, policy)
+  if (policy.mode === 'model') {
+    next = await rebuildWithModel(ctx, message.content, policy, signal, 'tools')
+  }
   if (next === null) return 0
 
   session.append(
@@ -331,6 +434,45 @@ function rewriteToolResult(ctx, session, seq, policy) {
   const after = measureBlocks(next)
   ctx.logger?.debug?.(describeChange('tools', before, after))
   return Math.max(0, before - after)
+}
+
+/**
+ * Rebuild one content array with a model-written summary in place of the elided middle.
+ * Falls back to the mechanical rewrite whenever the model path is unavailable,
+ * so an unconfigured or failing route never loses the saving entirely.
+ * @param {any} ctx - plugin context.
+ * @param {readonly any[]} blocks - original content blocks.
+ * @param {any} policy - section config carrying `headChars`, `tailChars` and `model`.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @param {'reasoning' | 'tools'} kind - which section asked.
+ * @returns {Promise<any[] | null>} replacement blocks, or `null` when within budget.
+ */
+async function rebuildWithModel(ctx, blocks, policy, signal, kind) {
+  const kindOfBlock = kind === 'tools' ? 'text' : 'reasoning'
+  const text = blocks.filter((block) => block?.type === kindOfBlock)
+    .map((block) => (typeof block.text === 'string' ? block.text : ''))
+    .join('')
+  const limit = kind === 'tools' ? policy.thresholdChars : policy.minChars
+  if ([...text].length <= limit) return null
+
+  const marker = kind === 'tools' ? TOOL_MARKER : REASONING_MARKER
+  const mechanical = () => (kind === 'tools' ? pruneToolContent(blocks, policy) : trimReasoning(blocks, policy))
+
+  try {
+    const replaced = await summarizeMiddle(
+      ctx,
+      policy.model ?? {},
+      text,
+      { headChars: policy.headChars, tailChars: policy.tailChars, marker },
+      signal,
+    )
+    if (replaced === null) throw new Error('empty-summary')
+    const rich = blocks.filter((block) => block?.type !== kindOfBlock)
+    return [{ type: kindOfBlock, text: replaced }, ...rich]
+  } catch (error) {
+    ctx.logger?.warn?.(`[compact-arsenal] model ${kind} unavailable, using mechanical: ${error?.message ?? error}`)
+    return mechanical()
+  }
 }
 
 /**

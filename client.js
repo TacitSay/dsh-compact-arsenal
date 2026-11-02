@@ -109,6 +109,58 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    function TextField(props) {
+      const wide = props.wide === true
+      return h('label', {
+        style: { display: 'flex', flexDirection: 'column', gap: 4, flex: wide ? '1 1 100%' : '1 1 160px', minWidth: 140 },
+      }, [
+        h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, props.label),
+        props.multiline
+          ? h('textarea', {
+            key: 'i',
+            value: String(props.value),
+            rows: 3,
+            placeholder: props.placeholder || '',
+            onChange: (event) => props.onChange(event.target.value),
+            style: {
+              width: '100%', padding: '6px 8px', borderRadius: 8, fontSize: 12, resize: 'vertical',
+              border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)', color: 'inherit',
+              lineHeight: 1.6, fontFamily: 'inherit',
+            },
+          })
+          : h('input', {
+            key: 'i',
+            type: 'text',
+            value: String(props.value),
+            placeholder: props.placeholder || '',
+            onChange: (event) => props.onChange(event.target.value),
+            style: {
+              width: '100%', padding: '5px 8px', borderRadius: 8, fontSize: 12,
+              border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)', color: 'inherit',
+            },
+          }),
+      ])
+    }
+
+    /** Provider / model / prompt / budget fields for one model-backed section. */
+    function ModelFields(props) {
+      const model = props.model || {}
+      const set = (key, value) => props.onChange({ ...model, [key]: value })
+      return h('div', {
+        style: {
+          display: 'flex', gap: 10, flexWrap: 'wrap', padding: '10px 12px',
+          border: `1px dashed ${LINE}`, borderRadius: 10,
+        },
+      }, [
+        h('p', { key: 'note', style: { margin: 0, flex: '1 1 100%', fontSize: 11, color: MUTED } },
+          '模型方式会额外调用一次模型，只在压缩触发时发生。留空则退回机械方式。'),
+        h(TextField, { key: 'p', label: '提供方', value: model.provider || '', placeholder: 'ark-plan', onChange: (v) => set('provider', v) }),
+        h(TextField, { key: 'm', label: '模型', value: model.model || '', placeholder: 'deepseek-v4.1-flash', onChange: (v) => set('model', v) }),
+        h(NumberField, { key: 't', label: '输出上限', value: model.maxTokens ?? 512, min: 64, step: 64, suffix: 'token', onChange: (v) => set('maxTokens', v) }),
+        h(TextField, { key: 'q', label: '压缩提示词', value: model.prompt || '', multiline: true, wide: true, onChange: (v) => set('prompt', v) }),
+      ])
+    }
+
     function Section(props) {
       return h('section', {
         style: {
@@ -144,6 +196,7 @@ window.__ModuleLoader__.load({
       const [stats, setStats] = useState({ reasoning: 0, tools: 0, chars: 0 })
       const [status, setStatus] = useState('loading')
       const [message, setMessage] = useState('')
+      const [totalApplied, setTotalApplied] = useState(null)
       const timer = useRef(null)
       const latest = useRef(emptyConfig)
 
@@ -181,6 +234,7 @@ window.__ModuleLoader__.load({
               setConfig(body.config)
               latest.current = body.config
               if (body.stats) setStats(body.stats)
+              setTotalApplied(body.totalApplied === undefined ? null : body.totalApplied)
               setStatus('ready')
               setMessage('已保存')
             })
@@ -203,14 +257,30 @@ window.__ModuleLoader__.load({
         [name]: { ...cfg[name], [key]: value },
       }))
 
+      const totalNotice = totalApplied === true
+        ? '已同步到 DSH 自带的压缩后端。摘要提示词由官方后端固定，这里只能改阈值、保留比例、上限与摘要模型。'
+        : totalApplied === false
+          ? '当前压缩后端不在本 profile 的可写范围内（例如由 agent 预设挂载），这些值只保存进本插件配置，暂不生效。'
+          : '打开上面的开关并保存后，会把这些参数写到 DSH 自带的压缩后端。摘要提示词由官方后端固定。'
+
       const total = h(Section, {
         key: 'total',
         title: '总压缩',
         subtitle: '把旧对话整段换成一份摘要',
-        badge: 'v0.2 计划',
+        enabled: config.total.enabled,
+        onToggle: (value) => setSection('total', 'enabled', value),
       }, [
-        h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
-          '当前由 DSH 自带的摘要后端负责；自定义提示词与摘要模型排在下个版本，本插件暂不接管。'),
+        h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'a', label: '阈值比例', value: config.total.thresholdRatio, min: 0, step: 0.05, onChange: (v) => setSection('total', 'thresholdRatio', Math.min(1, Math.max(0, v))) }),
+          h(NumberField, { key: 'b', label: '保留比例', value: config.total.retainRatio, min: 0, step: 0.01, onChange: (v) => setSection('total', 'retainRatio', Math.min(1, Math.max(0, v))) }),
+          h(NumberField, { key: 'c', label: '摘要上限', value: config.total.maxTokens, min: 256, step: 1024, suffix: 'token', onChange: (v) => setSection('total', 'maxTokens', v) }),
+        ]),
+        h('div', { key: 'model', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(TextField, { key: 'p', label: '摘要提供方', value: config.total.provider, placeholder: '留空 = 当前会话模型', onChange: (v) => setSection('total', 'provider', v) }),
+          h(TextField, { key: 'm', label: '摘要模型', value: config.total.model, placeholder: '留空 = 当前会话模型', onChange: (v) => setSection('total', 'model', v) }),
+        ]),
+        h('p', { key: 'note', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
+          totalNotice),
       ])
 
       const reasoning = h(Section, {
@@ -238,12 +308,18 @@ window.__ModuleLoader__.load({
           h(MethodCard, {
             key: 'model',
             title: '模型压缩',
-            description: '用模型改写思考。会调用模型，排在下个版本。',
-            unavailable: true,
-            selected: false,
-            onSelect: () => {},
+            description: '用模型把剪掉的中段改写成要点。会调用模型。',
+            selected: config.reasoning.mode === 'model',
+            onSelect: () => setSection('reasoning', 'mode', 'model'),
           }),
         ]),
+        config.reasoning.mode === 'model'
+          ? h(ModelFields, {
+            key: 'mf',
+            model: config.reasoning.model,
+            onChange: (value) => setSection('reasoning', 'model', value),
+          })
+          : null,
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.reasoning.minChars, min: 0, step: 100, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
@@ -264,18 +340,24 @@ window.__ModuleLoader__.load({
             key: 'truncate',
             title: '按字符预算',
             description: '超过阈值就保留头尾。不调用模型。',
-            selected: true,
-            onSelect: () => {},
+            selected: config.tools.mode !== 'model',
+            onSelect: () => setSection('tools', 'mode', 'truncate'),
           }),
           h(MethodCard, {
             key: 'model',
-            title: '模型判断',
-            description: '由模型判断哪段该留。会调用模型，排在下个版本。',
-            unavailable: true,
-            selected: false,
-            onSelect: () => {},
+            title: '模型压缩',
+            description: '用模型把剪掉的中段改写成要点。会调用模型。',
+            selected: config.tools.mode === 'model',
+            onSelect: () => setSection('tools', 'mode', 'model'),
           }),
         ]),
+        config.tools.mode === 'model'
+          ? h(ModelFields, {
+            key: 'mf',
+            model: config.tools.model,
+            onChange: (value) => setSection('tools', 'model', value),
+          })
+          : null,
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'k', label: '不改动最近', value: config.tools.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('tools', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '触发下限', value: config.tools.thresholdChars, min: 1, step: 256, suffix: '字符', onChange: (v) => setSection('tools', 'thresholdChars', v) }),
