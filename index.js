@@ -24,8 +24,8 @@ import {
 
 export const name = 'compact-arsenal'
 
-/** The Host services this plugin reads; both ship with dsh-base. */
-export const inject = ['sessions', 'tokenMeter']
+/** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
+export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
 
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
@@ -87,22 +87,101 @@ export function normalizeConfig(raw) {
  */
 export function apply(ctx, rawConfig) {
   const config = normalizeConfig(rawConfig)
-  if (!config.enabled) return
 
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
+  const stats = { reasoning: 0, tools: 0, chars: 0 }
 
-  ctx.on('agent/pre-step', async (payload, next) => {
-    const decision = await next()
-    if (decision?.kind !== 'enter') return decision
-    try {
-      rewrite(ctx, config, payload, lastProcessedTurn)
-    } catch (error) {
-      // A rewrite failure must never break the step.
-      ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
-    }
-    return decision
+  if (config.enabled) {
+    ctx.on('agent/pre-step', async (payload, next) => {
+      const decision = await next()
+      if (decision?.kind !== 'enter') return decision
+      try {
+        rewrite(ctx, config, payload, lastProcessedTurn, stats)
+      } catch (error) {
+        // A rewrite failure must never break the step.
+        ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
+      }
+      return decision
+    })
+  }
+
+  // The panel needs a read/write channel, so these routes exist even while the
+  // plugin is switched off: that is how it gets switched back on.
+  registerPanelRoutes(ctx, config, stats)
+}
+
+/** Route prefix owned by this plugin. */
+const API_PREFIX = '/compact-arsenal/api'
+
+/**
+ * Serve the panel's state and accept its edits.
+ * @param {any} ctx - plugin context.
+ * @param {any} config - the config this instance mounted with.
+ * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
+ */
+function registerPanelRoutes(ctx, config, stats) {
+  const webServer = ctx.get('webServer')
+  const configEditor = ctx.get('configEditor')
+  if (webServer === undefined) return
+
+  const send = (res, status, body) => {
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(body))
+  }
+
+  const route = (path, handler) => ctx.effect(() => webServer.register({ kind: 'exact', path, handler }))
+
+  route(`${API_PREFIX}/state`, (req, res) => {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
+    send(res, 200, {
+      config,
+      stats,
+      editable: configEditor !== undefined,
+    })
   })
+
+  route(`${API_PREFIX}/config`, async (req, res) => {
+    if (req.method !== 'POST') return send(res, 405, { error: 'method-not-allowed' })
+    if (configEditor === undefined) return send(res, 503, { error: 'config-editor-unavailable' })
+    let raw = ''
+    for await (const chunk of req) {
+      raw += chunk
+      if (raw.length > 64 * 1024) return send(res, 413, { error: 'payload-too-large' })
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return send(res, 400, { error: 'invalid-json' })
+    }
+    const next = normalizeConfig(parsed)
+    const entry = findOwnEntry(configEditor)
+    if (entry === undefined) return send(res, 409, { error: 'entry-not-addressable' })
+    try {
+      await configEditor.edit(entry, () => next)
+    } catch (error) {
+      return send(res, 500, { error: 'write-failed', message: String(error?.message ?? error) })
+    }
+    send(res, 200, { config: next, stats, editable: true })
+  })
+}
+
+/**
+ * The addressable Loader entry this package owns.
+ * @param {any} configEditor - the config editor service.
+ * @returns {any} matching entry, or `undefined` when the row is not addressable.
+ */
+function findOwnEntry(configEditor) {
+  try {
+    const entries = configEditor.entries()
+    return entries.find((entry) => {
+      const options = entry?.options ?? entry
+      return options?.name === 'dsh-compact-arsenal' || options?.id === 'compact-arsenal'
+    })
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -112,7 +191,7 @@ export function apply(ctx, rawConfig) {
  * @param {{ agent: { id: string }, turn: number }} payload - pre-step payload.
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
  */
-function rewrite(ctx, config, payload, lastProcessedTurn) {
+function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
   if (!config.reasoning.enabled && !config.tools.enabled) return
 
   const session = ctx.sessions.get(payload.agent.id)
@@ -135,13 +214,21 @@ function rewrite(ctx, config, payload, lastProcessedTurn) {
 
   if (config.reasoning.enabled) {
     for (const seq of dropRecent(assistantSeqs, config.reasoning.keepLast)) {
-      rewriteAssistant(ctx, session, seq, config.reasoning)
+      const saved = rewriteAssistant(ctx, session, seq, config.reasoning)
+      if (saved > 0) {
+        stats.reasoning += 1
+        stats.chars += saved
+      }
     }
   }
 
   if (config.tools.enabled) {
     for (const seq of dropRecent(toolSeqs, config.tools.keepLast)) {
-      rewriteToolResult(ctx, session, seq, config.tools)
+      const saved = rewriteToolResult(ctx, session, seq, config.tools)
+      if (saved > 0) {
+        stats.tools += 1
+        stats.chars += saved
+      }
     }
   }
 }
@@ -178,17 +265,18 @@ function dropRecent(seqs, keep) {
  * @param {any} session - live session.
  * @param {number} seq - surface seq of the assistant message.
  * @param {any} policy - reasoning section config.
+ * @returns {number} characters removed, or 0 when nothing was rewritten.
  */
 function rewriteAssistant(ctx, session, seq, policy) {
   const event = session.eventAt(seq)
-  if (event === undefined) return
+  if (event === undefined) return 0
   const message = event.data?.message
-  if (message?.role !== 'assistant' || !Array.isArray(message.content)) return
+  if (message?.role !== 'assistant' || !Array.isArray(message.content)) return 0
 
   const next = policy.mode === 'clear'
     ? clearReasoning(message.content)
     : trimReasoning(message.content, policy)
-  if (next === null) return
+  if (next === null) return 0
 
   session.append(
     'assistant/message',
@@ -201,7 +289,10 @@ function rewriteAssistant(ctx, session, seq, policy) {
     },
     { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq } },
   )
-  ctx.logger?.debug?.(describeChange('reasoning', measureBlocks(message.content), measureBlocks(next)))
+  const before = measureBlocks(message.content)
+  const after = measureBlocks(next)
+  ctx.logger?.debug?.(describeChange('reasoning', before, after))
+  return Math.max(0, before - after)
 }
 
 /**
@@ -210,19 +301,20 @@ function rewriteAssistant(ctx, session, seq, policy) {
  * @param {any} session - live session.
  * @param {number} seq - surface seq of the tool result.
  * @param {any} policy - tools section config.
+ * @returns {number} characters removed, or 0 when nothing was rewritten.
  */
 function rewriteToolResult(ctx, session, seq, policy) {
   const event = session.eventAt(seq)
-  if (event === undefined) return
+  if (event === undefined) return 0
   const message = event.data?.message
-  if (message?.role !== 'tool' || !Array.isArray(message.content)) return
+  if (message?.role !== 'tool' || !Array.isArray(message.content)) return 0
   if (Array.isArray(policy.onlyTools) && policy.onlyTools.length > 0) {
     const toolName = resolveToolName(session, event)
-    if (toolName === undefined || !policy.onlyTools.includes(toolName)) return
+    if (toolName === undefined || !policy.onlyTools.includes(toolName)) return 0
   }
 
   const next = pruneToolContent(message.content, policy)
-  if (next === null) return
+  if (next === null) return 0
 
   session.append(
     'tool/result',
@@ -235,7 +327,10 @@ function rewriteToolResult(ctx, session, seq, policy) {
     },
     { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] },
   )
-  ctx.logger?.debug?.(describeChange('tools', measureBlocks(message.content), measureBlocks(next)))
+  const before = measureBlocks(message.content)
+  const after = measureBlocks(next)
+  ctx.logger?.debug?.(describeChange('tools', before, after))
+  return Math.max(0, before - after)
 }
 
 /**

@@ -3,12 +3,15 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
+    const { useCallback, useEffect, useRef, useState } = React
 
     const MUTED = 'rgba(127,127,127,0.75)'
-    const LINE = 'rgba(127,127,127,0.28)'
+    const LINE = 'rgba(127,127,127,0.26)'
     const CARD = 'rgba(127,127,127,0.06)'
     const ACCENT = '#4b6fff'
     const OK = '#2f9e62'
+    const WARN = '#d9822b'
+    const API = '/compact-arsenal/api'
 
     function PanelIcon(props) {
       const size = props && typeof props.size === 'number' ? props.size : 20
@@ -21,140 +24,313 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    function TrimBar(props) {
-      const total = Math.max(1, props.head + props.cut + props.tail)
-      const seg = (key, value, color) => h('div', {
-        key, title: `${value}`,
-        style: { width: `${(value / total) * 100}%`, background: color, height: '100%' },
-      })
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } }, [
-        h('div', {
-          key: 'bar',
-          style: { display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', border: `1px solid ${LINE}` },
-        }, [
-          seg('head', props.head, ACCENT),
-          seg('cut', props.cut, 'rgba(127,127,127,0.30)'),
-          seg('tail', props.tail, '#7aa2ff'),
-        ]),
-        h('div', { key: 'legend', style: { display: 'flex', gap: 12, fontSize: 11, color: MUTED } }, [
-          h('span', { key: 'h' }, `保留开头 ${props.head}`),
-          h('span', { key: 'c' }, `剪掉 ${props.cut}`),
-          h('span', { key: 't' }, `保留结尾 ${props.tail}`),
-        ]),
-      ])
+    function Switch(props) {
+      const on = props.checked === true
+      return h('button', {
+        type: 'button',
+        role: 'switch',
+        'aria-checked': on,
+        'aria-label': props.label,
+        disabled: props.disabled === true,
+        onClick: () => props.onChange(!on),
+        style: {
+          position: 'relative', width: 38, height: 22, borderRadius: 999, padding: 0,
+          border: `1px solid ${on ? 'rgba(47,158,98,0.55)' : LINE}`,
+          background: on ? 'rgba(47,158,98,0.30)' : 'rgba(127,127,127,0.14)',
+          cursor: props.disabled ? 'not-allowed' : 'pointer',
+          opacity: props.disabled ? 0.5 : 1,
+          transition: 'background 120ms ease, border-color 120ms ease',
+        },
+      }, h('span', {
+        style: {
+          position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16,
+          borderRadius: 999, background: on ? OK : 'rgba(127,127,127,0.75)',
+          transition: 'left 120ms ease, background 120ms ease',
+        },
+      }))
     }
 
-    function Pill(props) {
-      const color = props.on ? OK : MUTED
-      return h('span', {
+    function MethodCard(props) {
+      const active = props.selected === true
+      const disabled = props.unavailable === true
+      return h('button', {
+        type: 'button',
+        disabled,
+        onClick: () => { if (!disabled) props.onSelect() },
         style: {
-          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px',
-          borderRadius: 999, fontSize: 11, color,
-          border: `1px solid ${props.on ? 'rgba(47,158,98,0.45)' : LINE}`,
-          background: props.on ? 'rgba(47,158,98,0.10)' : 'transparent',
+          display: 'flex', gap: 10, alignItems: 'flex-start', textAlign: 'left',
+          padding: '10px 12px', borderRadius: 10, cursor: disabled ? 'not-allowed' : 'pointer',
+          border: `1px solid ${active ? 'rgba(75,111,255,0.55)' : LINE}`,
+          background: active ? 'rgba(75,111,255,0.10)' : 'transparent',
+          color: 'inherit', opacity: disabled ? 0.55 : 1, flex: '1 1 180px',
         },
       }, [
-        h('span', { key: 'dot', style: { width: 6, height: 6, borderRadius: 3, background: color } }),
-        h('span', { key: 'txt' }, props.children),
+        h('span', {
+          key: 'check',
+          style: {
+            flex: '0 0 auto', width: 16, height: 16, marginTop: 1, borderRadius: 4,
+            border: `1.5px solid ${active ? ACCENT : 'rgba(127,127,127,0.55)'}`,
+            background: active ? ACCENT : 'transparent',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontSize: 11, lineHeight: 1,
+          },
+        }, active ? '✓' : ''),
+        h('span', { key: 'body', style: { display: 'flex', flexDirection: 'column', gap: 3 } }, [
+          h('strong', { key: 't', style: { fontSize: 12.5, fontWeight: 600 } }, props.title),
+          h('span', { key: 'd', style: { fontSize: 11, color: MUTED, lineHeight: 1.5 } }, props.description),
+        ]),
       ])
     }
 
-    function Card(props) {
+    function NumberField(props) {
+      return h('label', {
+        style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 120px', minWidth: 110 },
+      }, [
+        h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, props.label),
+        h('span', { key: 'w', style: { display: 'flex', alignItems: 'center', gap: 6 } }, [
+          h('input', {
+            key: 'i',
+            type: 'number',
+            value: String(props.value),
+            min: props.min === undefined ? 0 : props.min,
+            step: props.step === undefined ? 1 : props.step,
+            onChange: (event) => {
+              const next = Number(event.target.value)
+              props.onChange(Number.isFinite(next) ? next : 0)
+            },
+            style: {
+              width: '100%', padding: '5px 8px', borderRadius: 8, fontSize: 12,
+              border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)',
+              color: 'inherit', fontVariantNumeric: 'tabular-nums',
+            },
+          }),
+          props.suffix ? h('span', { key: 's', style: { fontSize: 11, color: MUTED } }, props.suffix) : null,
+        ]),
+      ])
+    }
+
+    function Section(props) {
       return h('section', {
         style: {
           border: `1px solid ${LINE}`, borderRadius: 12, background: CARD,
-          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10,
+          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
         },
       }, [
         h('header', {
-          key: 'head',
+          key: 'h',
           style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
         }, [
-          h('div', { key: 'titles', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
-            h('strong', { key: 'title', style: { fontSize: 14 } }, props.title),
-            h('span', { key: 'sub', style: { fontSize: 11, color: MUTED } }, props.subtitle),
+          h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
+            h('strong', { key: 'a', style: { fontSize: 14 } }, props.title),
+            h('span', { key: 'b', style: { fontSize: 11, color: MUTED } }, props.subtitle),
           ]),
-          props.badge,
+          props.onToggle
+            ? h(Switch, { key: 'sw', checked: props.enabled, onChange: props.onToggle, label: props.title })
+            : h('span', { key: 'badge', style: { fontSize: 11, color: MUTED } }, props.badge || ''),
         ]),
         ...props.children,
       ])
     }
 
-    function Row(props) {
-      return h('div', {
-        style: { display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 12, padding: '1px 0' },
-      }, [
-        h('span', { key: 'l', style: { color: MUTED } }, props.label),
-        h('span', { key: 'v', style: { fontVariantNumeric: 'tabular-nums' } }, props.value),
-      ])
+    const emptyConfig = {
+      enabled: true,
+      trigger: { pressureRatio: 0.75, runWithoutWindow: false },
+      reasoning: { enabled: false, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300 },
+      tools: { enabled: false, thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, onlyTools: [] },
     }
 
-    const REASONING = { enabled: false, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300 }
-    const TOOLS = { enabled: false, thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2 }
-
     function Panel() {
-      const title = h('header', { key: 'hdr', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, [
-        h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
-        h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
-          '三个独立板块，每个都能单独开关。机械方式不调用模型、不花钱；只在上下文接近上限时才动手。'),
-      ])
+      const [config, setConfig] = useState(emptyConfig)
+      const [stats, setStats] = useState({ reasoning: 0, tools: 0, chars: 0 })
+      const [status, setStatus] = useState('loading')
+      const [message, setMessage] = useState('')
+      const timer = useRef(null)
+      const latest = useRef(emptyConfig)
 
-      const total = h(Card, {
+      useEffect(() => {
+        let alive = true
+        fetch(`${API}/state`, { credentials: 'same-origin' })
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+          .then((body) => {
+            if (!alive) return
+            setConfig(body.config)
+            latest.current = body.config
+            setStats(body.stats || { reasoning: 0, tools: 0, chars: 0 })
+            setStatus(body.editable === false ? 'readonly' : 'ready')
+          })
+          .catch((error) => {
+            if (!alive) return
+            setStatus('error')
+            setMessage(String((error && error.message) || error))
+          })
+        return () => { alive = false }
+      }, [])
+
+      const save = useCallback((next) => {
+        if (timer.current) clearTimeout(timer.current)
+        setStatus('saving')
+        timer.current = setTimeout(() => {
+          fetch(`${API}/config`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(next),
+          })
+            .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+            .then((body) => {
+              setConfig(body.config)
+              latest.current = body.config
+              if (body.stats) setStats(body.stats)
+              setStatus('ready')
+              setMessage('已保存')
+            })
+            .catch((error) => {
+              setStatus('error')
+              setMessage(String((error && error.message) || error))
+            })
+        }, 500)
+      }, [])
+
+      const patch = useCallback((updater) => {
+        const next = updater(latest.current)
+        latest.current = next
+        setConfig(next)
+        save(next)
+      }, [save])
+
+      const setSection = (name, key, value) => patch((cfg) => ({
+        ...cfg,
+        [name]: { ...cfg[name], [key]: value },
+      }))
+
+      const total = h(Section, {
         key: 'total',
         title: '总压缩',
         subtitle: '把旧对话整段换成一份摘要',
-        badge: h(Pill, { on: false }, 'v0.2 计划'),
+        badge: 'v0.2 计划',
       }, [
         h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
-          '当前由 DSH 自带的摘要后端负责；自定义提示词与摘要模型排在 v0.2，本插件暂不接管。'),
+          '当前由 DSH 自带的摘要后端负责；自定义提示词与摘要模型排在下个版本，本插件暂不接管。'),
       ])
 
-      const reasoningCut = Math.max(1, REASONING.minChars - REASONING.headChars - REASONING.tailChars)
-      const reasoning = h(Card, {
+      const reasoning = h(Section, {
         key: 'reasoning',
         title: '思考压缩',
         subtitle: '改写旧轮次助手消息里的推理笔记',
-        badge: h(Pill, { on: REASONING.enabled }, REASONING.enabled ? '已开启' : '默认关闭'),
+        enabled: config.reasoning.enabled,
+        onToggle: (value) => setSection('reasoning', 'enabled', value),
       }, [
-        h(TrimBar, { key: 'bar', head: REASONING.headChars, cut: reasoningCut, tail: REASONING.tailChars }),
-        h(Row, { key: 'r1', label: '方式', value: REASONING.mode === 'clear' ? '整块清除' : '保留头尾' }),
-        h(Row, { key: 'r2', label: '触发下限', value: `${REASONING.minChars} 字符` }),
-        h(Row, { key: 'r3', label: '不改动最近', value: `${REASONING.keepLast} 条助手消息` }),
-        h(Row, { key: 'r4', label: '模型调用', value: '无' }),
+        h('div', { key: 'methods', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(MethodCard, {
+            key: 'truncate',
+            title: '机械截断',
+            description: '保留开头与结尾，剪掉中段。不调用模型。',
+            selected: config.reasoning.mode === 'truncate',
+            onSelect: () => setSection('reasoning', 'mode', 'truncate'),
+          }),
+          h(MethodCard, {
+            key: 'clear',
+            title: '整块清除',
+            description: '直接删掉旧思考。最省空间，丢失最多。',
+            selected: config.reasoning.mode === 'clear',
+            onSelect: () => setSection('reasoning', 'mode', 'clear'),
+          }),
+          h(MethodCard, {
+            key: 'model',
+            title: '模型压缩',
+            description: '用模型改写思考。会调用模型，排在下个版本。',
+            unavailable: true,
+            selected: false,
+            onSelect: () => {},
+          }),
+        ]),
+        h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
+          h(NumberField, { key: 'm', label: '触发下限', value: config.reasoning.minChars, min: 0, step: 100, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
+          h(NumberField, { key: 'h', label: '保留开头', value: config.reasoning.headChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'headChars', v) }),
+          h(NumberField, { key: 't', label: '保留结尾', value: config.reasoning.tailChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'tailChars', v) }),
+        ]),
       ])
 
-      const toolsCut = Math.max(1, TOOLS.thresholdChars - TOOLS.headChars - TOOLS.tailChars)
-      const tools = h(Card, {
+      const tools = h(Section, {
         key: 'tools',
         title: '工具输出压缩',
         subtitle: '剪掉旧轮次里超长命令结果的中段',
-        badge: h(Pill, { on: TOOLS.enabled }, TOOLS.enabled ? '已开启' : '默认关闭'),
+        enabled: config.tools.enabled,
+        onToggle: (value) => setSection('tools', 'enabled', value),
       }, [
-        h(TrimBar, { key: 'bar', head: TOOLS.headChars, cut: toolsCut, tail: TOOLS.tailChars }),
-        h(Row, { key: 'r1', label: '触发下限', value: `${TOOLS.thresholdChars} 字符` }),
-        h(Row, { key: 'r2', label: '不改动最近', value: `${TOOLS.keepLast} 条工具结果` }),
-        h(Row, { key: 'r3', label: '模型调用', value: '无' }),
+        h('div', { key: 'methods', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(MethodCard, {
+            key: 'truncate',
+            title: '按字符预算',
+            description: '超过阈值就保留头尾。不调用模型。',
+            selected: true,
+            onSelect: () => {},
+          }),
+          h(MethodCard, {
+            key: 'model',
+            title: '模型判断',
+            description: '由模型判断哪段该留。会调用模型，排在下个版本。',
+            unavailable: true,
+            selected: false,
+            onSelect: () => {},
+          }),
+        ]),
+        h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, { key: 'k', label: '不改动最近', value: config.tools.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('tools', 'keepLast', v) }),
+          h(NumberField, { key: 'm', label: '触发下限', value: config.tools.thresholdChars, min: 1, step: 256, suffix: '字符', onChange: (v) => setSection('tools', 'thresholdChars', v) }),
+          h(NumberField, { key: 'h', label: '保留开头', value: config.tools.headChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'headChars', v) }),
+          h(NumberField, { key: 't', label: '保留结尾', value: config.tools.tailChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'tailChars', v) }),
+        ]),
       ])
 
-      const snippet = '- id: compact-arsenal\n  config:\n    reasoning:\n      enabled: true\n    tools:\n      enabled: true'
-      const howto = h('section', {
-        key: 'howto',
-        style: {
-          border: `1px dashed ${LINE}`, borderRadius: 12, padding: '12px 16px',
-          display: 'flex', flexDirection: 'column', gap: 6,
-        },
+      const trigger = h(Section, {
+        key: 'trigger',
+        title: '触发条件',
+        subtitle: '上下文用到多少才动手；平时完全不动',
+        badge: '',
       }, [
-        h('strong', { key: 't', style: { fontSize: 12 } }, '怎么开启'),
-        h('p', { key: 'p', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 } },
-          '在 profile 的 cordis.patch.yml 里给 compact-arsenal 这一行加 config：'),
-        h('pre', {
-          key: 'pre',
-          style: {
-            margin: 0, padding: 10, borderRadius: 8, overflowX: 'auto',
-            background: 'rgba(127,127,127,0.10)', fontSize: 11, lineHeight: 1.6,
-          },
-        }, snippet),
-        h('p', { key: 'p2', style: { margin: 0, fontSize: 11, color: MUTED } }, '改完重启 DSH 生效。'),
+        h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
+          h(NumberField, {
+            key: 'r', label: '压力阈值', value: config.trigger.pressureRatio,
+            min: 0, step: 0.05,
+            onChange: (v) => setSection('trigger', 'pressureRatio', Math.min(1, Math.max(0, v))),
+          }),
+        ]),
+        h('p', { key: 'p', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
+          `0.75 表示用到窗口的 75% 才开始压缩。本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次，共省下约 ${stats.chars} 字符。`),
+      ])
+
+      const statusText = status === 'loading' ? '正在读取配置…'
+        : status === 'saving' ? '正在保存…'
+          : status === 'error' ? `保存失败：${message}`
+            : status === 'readonly' ? '配置写入不可用（只读）'
+              : (message || '已连接')
+
+      const header = h('header', {
+        key: 'hdr',
+        style: { display: 'flex', flexDirection: 'column', gap: 8 },
+      }, [
+        h('div', { key: 'row', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } }, [
+          h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
+            h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
+            h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
+              '开关即生效，参数改完自动保存。机械方式不调用模型、不花钱。'),
+          ]),
+          h('div', { key: 'master', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+            h('span', { key: 'l', style: { fontSize: 12, color: MUTED } }, '总开关'),
+            h(Switch, {
+              key: 'sw',
+              checked: config.enabled,
+              label: '插件总开关',
+              onChange: (value) => patch((cfg) => ({ ...cfg, enabled: value })),
+            }),
+          ]),
+        ]),
+        h('span', {
+          key: 'status',
+          style: { fontSize: 11, color: status === 'error' ? WARN : MUTED },
+        }, statusText),
       ])
 
       const safety = h('p', {
@@ -167,7 +343,7 @@ window.__ModuleLoader__.load({
           height: '100%', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [title, total, reasoning, tools, howto, safety])
+      }, [header, total, reasoning, tools, trigger, safety])
     }
 
     return {
