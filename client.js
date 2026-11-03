@@ -223,7 +223,7 @@ window.__ModuleLoader__.load({
 
     const MODEL_DEFAULT = {
       provider: '', model: '',
-      prompt: '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。',
+      prompt: '保留文件名、命令、报错原文、关键数值与结论；语言简洁，不要评论，不要提及压缩本身。',
       maxTokens: 512,
     }
 
@@ -451,10 +451,23 @@ window.__ModuleLoader__.load({
         ]),
       ])
 
+      // The master switch owns every section: with it off nothing runs, so the
+      // sections are dimmed and non-interactive rather than silently ignored.
+      const sections = h('div', {
+        key: 'sections',
+        style: {
+          display: 'flex', flexDirection: 'column', gap: 16,
+          opacity: config.enabled ? 1 : 0.45,
+          pointerEvents: config.enabled ? 'auto' : 'none',
+          transition: 'opacity 120ms ease',
+        },
+      }, [total, reasoning, tools])
+
       const statsLine = h('p', {
-        key: 'stats',
         style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
-      }, `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`)
+      }, config.enabled
+        ? `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`
+        : '总开关已关闭：三个板块都不会执行。')
 
       const statusText = status === 'loading' ? '正在读取配置…'
         : status === 'saving' ? '正在保存…'
@@ -498,7 +511,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, total, reasoning, tools, statsLine, safety])
+      }, [header, sections, statsLine, safety])
     }
 
     return {

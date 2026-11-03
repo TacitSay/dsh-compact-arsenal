@@ -30,11 +30,16 @@ export const name = 'compact-arsenal'
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
 
-/** Prompt used when a model mode is enabled but the user wrote none. */
-const DEFAULT_MODEL_PROMPT = '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。'
+/**
+ * Style instruction for the per-fragment modes.
+ *
+ * The output SHAPE (one point per fragment, JSON array, length limit) belongs to
+ * the batching layer, not to this text, so the two can never contradict.
+ */
+const DEFAULT_MODEL_PROMPT = '保留文件名、命令、报错原文、关键数值与结论；语言简洁，不要评论，不要提及压缩本身。'
 
 /** Prompt used by the total pass when the user wrote none. */
-const DEFAULT_TOTAL_PROMPT = '你是压缩引擎。把下面这段对话压缩成一份结构化的中文检查点：保留用户目标与偏好、涉及的文件与命令、报错与修法、已完成与待办、下一步。用简短条目，按 ## 标题分节，不要评论，不要提及压缩本身。'
+const DEFAULT_TOTAL_PROMPT = '把这段对话压缩成一份结构化的中文检查点，按 ## 标题分节：用户目标与偏好、涉及的文件与命令、报错与修法、已完成与待办、下一步。保留文件名、命令、报错原文与关键数值，用简短条目，不要评论，不要提及压缩本身。'
 
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
@@ -117,6 +122,10 @@ export function normalizeConfig(raw) {
   if (isUnusablePrompt(total.prompt)) total.prompt = DEFAULT_TOTAL_PROMPT
   if (isUnusablePrompt(reasoningModel.prompt)) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
   if (isUnusablePrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
+  // Legacy defaults carried the output format ("只输出要点"), which used to fight
+  // the batching layer's own instruction. Re-seed those exact old texts.
+  if (isLegacyModelPrompt(reasoningModel.prompt)) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
+  if (isLegacyModelPrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     total,
@@ -147,6 +156,19 @@ export function isUnusablePrompt(prompt) {
   if (marks < 5) return false
   const meaningful = text.replace(/\s/g, '').length
   return marks / Math.max(1, meaningful) >= 0.3
+}
+
+/**
+ * Whether a stored prompt is one of the retired built-in defaults.
+ *
+ * Those texts ended with "只输出要点", an output-format demand that fought the
+ * batching layer's own JSON instruction; they are re-seeded to the style-only text.
+ *
+ * @param {unknown} prompt - stored prompt value.
+ * @returns {boolean} true when the value is an obsolete default.
+ */
+function isLegacyModelPrompt(prompt) {
+  return typeof prompt === 'string' && prompt.includes('只输出要点') && prompt.includes('不超过 200 字')
 }
 
 /**
