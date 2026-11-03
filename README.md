@@ -32,11 +32,11 @@
 ## 安装
 
 ```sh
-# GitHub 源
-dsh plugin --profile <profile> add "github:TacitSay/dsh-compact-arsenal#main"
+# GitHub 源（把 web 换成你的 profile 名）
+dsh plugin --profile web add "github:TacitSay/dsh-compact-arsenal#main"
 
 # 或本地目录（开发）
-dsh plugin --profile <profile> add E:\path\to\dsh-compact-arsenal
+dsh plugin --profile web add E:\path\to\dsh-compact-arsenal
 ```
 
 重启 DSH 后，左栏出现「上下文压缩」图标。**所有板块默认关闭**，装上不改变任何行为。
