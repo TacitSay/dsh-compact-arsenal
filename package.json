@@ -1,40 +1,58 @@
 {
   "name": "dsh-compact-arsenal",
-  "version": "0.1.0",
-  "description": "Configurable context compaction for DeepSeek Harness: three independent sections ? whole-context summary, reasoning trimming, tool-output pruning.",
+  "version": "0.2.0",
+  "description": "Configurable context compaction for DeepSeek Harness: three independent sections — whole-context checkpoint, reasoning compression and tool-output pruning, each with its own switch, threshold and method, plus a left-sidebar panel.",
+  "icon": "icon.svg",
+  "author": "TacitSay",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TacitSay/dsh-compact-arsenal.git"
+  },
+  "homepage": "https://github.com/TacitSay/dsh-compact-arsenal",
+  "bugs": {
+    "url": "https://github.com/TacitSay/dsh-compact-arsenal/issues"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
-    "./policy": "./lib/policy.js"
+    "./policy": "./lib/policy.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
     "client.js",
     "lib",
     "cordis.patch.yml",
-    "locale",
+    "locale/*.json",
     "icon.svg",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "deepseek-harness",
-    "cordis",
-    "compaction",
-    "context",
-    "token"
-  ],
-  "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "compaction",
+    "context",
+    "token",
+    "reasoning",
+    "tool-output",
+    "ui"
+  ],
+  "license": "MIT",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -46,6 +64,11 @@
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-sidebar"
       ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.5": "compatible"
+      }
     }
   }
 }
