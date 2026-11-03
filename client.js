@@ -231,8 +231,8 @@ window.__ModuleLoader__.load({
       enabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
       total: { enabled: false, pressureRatio: 0.8, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
-      reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minChars: 2000, headChars: 600, tailChars: 300, maxPerPass: 3, model: { ...MODEL_DEFAULT } },
-      tools: { enabled: false, pressureRatio: 0.75, mode: 'truncate', thresholdChars: 8192, headChars: 4096, tailChars: 1024, keepLast: 2, maxPerPass: 3, onlyTools: [], model: { ...MODEL_DEFAULT } },
+      reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
+      tools: { enabled: false, pressureRatio: 0.75, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
     }
 
     /**
@@ -396,7 +396,8 @@ window.__ModuleLoader__.load({
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'pr', label: '触发阈值', value: config.reasoning.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('reasoning', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
-          h(NumberField, { key: 'm', label: '触发下限', value: config.reasoning.minChars, min: 0, step: 100, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
+          h(NumberField, { key: 'm', label: '总量下限', value: config.reasoning.minTotalChars, min: 0, step: 1000, suffix: '字符', onChange: (v) => setSection('reasoning', 'minTotalChars', v) }),
+          h(NumberField, { key: 'f', label: '单项下限', value: config.reasoning.minChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
           config.reasoning.mode === 'model'
             ? null
             : h(NumberField, { key: 'h', label: '保留开头', value: config.reasoning.headChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'headChars', v) }),
@@ -439,7 +440,8 @@ window.__ModuleLoader__.load({
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'pr', label: '触发阈值', value: config.tools.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('tools', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不改动最近', value: config.tools.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('tools', 'keepLast', v) }),
-          h(NumberField, { key: 'm', label: '触发下限', value: config.tools.thresholdChars, min: 1, step: 256, suffix: '字符', onChange: (v) => setSection('tools', 'thresholdChars', v) }),
+          h(NumberField, { key: 'm', label: '总量下限', value: config.tools.minTotalChars, min: 0, step: 1000, suffix: '字符', onChange: (v) => setSection('tools', 'minTotalChars', v) }),
+          h(NumberField, { key: 'f', label: '单项下限', value: config.tools.minChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('tools', 'minChars', v) }),
           config.tools.mode === 'model'
             ? null
             : h(NumberField, { key: 'h', label: '保留开头', value: config.tools.headChars, min: 0, step: 128, suffix: '字符', onChange: (v) => setSection('tools', 'headChars', v) }),

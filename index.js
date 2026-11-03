@@ -23,7 +23,7 @@ import {
   pruneToolContent,
   trimReasoning,
 } from './lib/policy.js'
-import { summarizeMiddle } from './lib/summarize.js'
+import { summarize, summarizeBatch, summarizeMiddle } from './lib/summarize.js'
 
 export const name = 'compact-arsenal'
 
@@ -56,10 +56,13 @@ export const DEFAULTS = Object.freeze({
     pressureRatio: 0.75,
     mode: 'truncate',
     keepLast: 3,
-    minChars: 2000,
+    minTotalChars: 15000,
+    minChars: 200,
     headChars: 600,
     tailChars: 300,
-    maxPerPass: 3,
+    batchChars: 12000,
+    maxItems: 12,
+    maxCharsPerPass: 40000,
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
   tools: {
@@ -67,10 +70,14 @@ export const DEFAULTS = Object.freeze({
     pressureRatio: 0.75,
     mode: 'truncate',
     thresholdChars: 8192,
+    minTotalChars: 15000,
+    minChars: 200,
     headChars: 4096,
     tailChars: 1024,
     keepLast: 2,
-    maxPerPass: 3,
+    batchChars: 12000,
+    maxItems: 12,
+    maxCharsPerPass: 40000,
     onlyTools: [],
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
@@ -404,30 +411,192 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
   }
 
   if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
-    let done = 0
-    for (const seq of dropRecent(assistantSeqs, config.reasoning.keepLast)) {
-      if (done >= (config.reasoning.maxPerPass ?? 3)) break
-      const saved = await rewriteAssistant(ctx, session, seq, config.reasoning, payload.signal)
-      if (saved > 0) {
-        done += 1
-        stats.reasoning += 1
-        stats.chars += saved
-      }
+    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal)
+    if (saved.chars > 0) {
+      stats.reasoning += saved.items
+      stats.chars += saved.chars
     }
   }
 
   if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
-    let done = 0
-    for (const seq of dropRecent(toolSeqs, config.tools.keepLast)) {
-      if (done >= (config.tools.maxPerPass ?? 3)) break
-      const saved = await rewriteToolResult(ctx, session, seq, config.tools, payload.signal)
-      if (saved > 0) {
-        done += 1
-        stats.tools += 1
-        stats.chars += saved
-      }
+    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal)
+    if (saved.chars > 0) {
+      stats.tools += saved.items
+      stats.chars += saved.chars
     }
   }
+}
+
+/** Marker text per section, used both when writing and when skipping done work. */
+function sectionMarker(kind) {
+  return kind === 'tools' ? TOOL_MARKER : REASONING_MARKER
+}
+
+/**
+ * Text a section owns inside one event.
+ * @param {any} event - surface event.
+ * @param {'reasoning' | 'tools'} kind - section kind.
+ * @returns {string} concatenated text, or '' when the event carries none.
+ */
+function sectionText(event, kind) {
+  const blocks = event.data?.message?.content
+  if (!Array.isArray(blocks)) return ''
+  const wanted = kind === 'tools' ? 'text' : 'reasoning'
+  return blocks.filter((block) => block?.type === wanted)
+    .map((block) => (typeof block.text === 'string' ? block.text : ''))
+    .join('')
+}
+
+/**
+ * Replace one event's text with a rewritten version, keeping message identity.
+ * @param {any} session - live session.
+ * @param {any} event - the surface event being replaced.
+ * @param {number} seq - its surface seq.
+ * @param {'reasoning' | 'tools'} kind - section kind.
+ * @param {string} text - replacement text.
+ * @returns {void}
+ */
+function applyRewrittenText(session, event, seq, kind, text) {
+  const blocks = event.data?.message?.content
+  const wanted = kind === 'tools' ? 'text' : 'reasoning'
+  const rich = blocks.filter((block) => block?.type !== wanted)
+  const message = { ...event.data.message, content: [{ type: wanted, text }, ...rich] }
+  if (kind === 'tools') {
+    session.append('tool/result', {
+      turn: event.data.turn,
+      step: event.data.step,
+      message,
+      ...(event.data.error === undefined ? {} : { error: event.data.error }),
+      ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
+    }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
+    return
+  }
+  session.append('assistant/message', {
+    turn: event.data.turn,
+    step: event.data.step,
+    message,
+    ...(event.data.usage === undefined ? {} : { usage: event.data.usage }),
+    stream: event.data.stream ?? [],
+  }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq } })
+}
+
+/**
+ * Compress one section: gate on the section total, then work in batches.
+ *
+ * Reasoning arrives as many small fragments, so a per-fragment threshold never
+ * fires. The gate is therefore the section total, and one model call covers a
+ * whole batch of fragments.
+ *
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @param {any} policy - section config.
+ * @param {'reasoning' | 'tools'} kind - section kind.
+ * @param {readonly number[]} seqs - candidate surface seqs, oldest first.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @returns {Promise<{ items: number, chars: number }>} rewrites landed and text dropped.
+ */
+async function compressSection(ctx, session, policy, kind, seqs, signal) {
+  const marker = sectionMarker(kind)
+  const markerKey = marker.trim()
+  const minTotal = Number.isFinite(policy.minTotalChars) ? policy.minTotalChars : 15000
+  const perItemFloor = Number.isFinite(policy.minChars) ? policy.minChars : 0
+  const maxItems = Number.isFinite(policy.maxItems) ? policy.maxItems : 12
+  const maxChars = Number.isFinite(policy.maxCharsPerPass) ? policy.maxCharsPerPass : 40000
+  const batchChars = Number.isFinite(policy.batchChars) ? policy.batchChars : 12000
+
+  const candidates = []
+  let totalChars = 0
+  for (const seq of seqs) {
+    const event = session.eventAt(seq)
+    if (event === undefined) continue
+    const text = sectionText(event, kind)
+    if (text === '') continue
+    if (text.includes(markerKey)) continue
+    if (perItemFloor > 0 && text.length < perItemFloor) continue
+    candidates.push({ seq, event, text })
+    totalChars += text.length
+  }
+  if (totalChars < minTotal) return { items: 0, chars: 0 }
+
+  const routed = session.requestContext?.() ?? {}
+  const model = policy.model ?? {}
+  const modelCfg = {
+    ...model,
+    provider: model.provider || routed.provider || '',
+    model: model.model || routed.model || '',
+    prompt: model.prompt || '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。',
+  }
+
+  let items = 0
+  let chars = 0
+  let index = 0
+  while (index < candidates.length && items < maxItems && chars < maxChars) {
+    const batch = []
+    let batchSize = 0
+    while (index < candidates.length && batch.length < 8 && batchSize < batchChars) {
+      batch.push(candidates[index])
+      batchSize += candidates[index].text.length
+      index += 1
+    }
+
+    const summaries = policy.mode === 'model'
+      ? await summarizeBatchSafe(ctx, modelCfg, batch.map((item) => item.text), signal)
+      : null
+
+    for (let i = 0; i < batch.length; i += 1) {
+      const item = batch[i]
+      const replacement = buildReplacement(item.text, policy, marker, summaries === null ? null : summaries[i])
+      if (replacement === null) continue
+      try {
+        applyRewrittenText(session, item.event, item.seq, kind, replacement)
+      } catch (error) {
+        ctx.logger?.warn?.(`[compact-arsenal] ${kind} replacement rejected: ${error?.message ?? error}`)
+        continue
+      }
+      items += 1
+      chars += Math.max(0, item.text.length - replacement.length)
+    }
+  }
+  return { items, chars }
+}
+
+/**
+ * Ask for a batch of summaries, downgrading to `null` on any failure.
+ * @param {any} ctx - plugin context.
+ * @param {any} cfg - model config.
+ * @param {readonly string[]} texts - fragments.
+ * @param {AbortSignal | undefined} signal - cancellation.
+ * @returns {Promise<string[] | null>} summaries, or `null` to use mechanical output.
+ */
+async function summarizeBatchSafe(ctx, cfg, texts, signal) {
+  try {
+    return await summarizeBatch(ctx, cfg, texts, signal)
+  } catch (error) {
+    ctx.logger?.warn?.(`[compact-arsenal] batch summary fell back to mechanical: ${error?.message ?? error}`)
+    return null
+  }
+}
+
+/**
+ * Replacement text for one fragment.
+ * @param {string} text - original text.
+ * @param {any} policy - section config.
+ * @param {string} marker - section marker.
+ * @param {string | undefined} summary - model summary, when available.
+ * @returns {string | null} replacement text, or `null` to leave the fragment alone.
+ */
+function buildReplacement(text, policy, marker, summary) {
+  const head = Number.isFinite(policy.headChars) ? policy.headChars : 0
+  const tail = Number.isFinite(policy.tailChars) ? policy.tailChars : 0
+  const points = [...text]
+  if (typeof summary === 'string' && summary !== '') {
+    const keptHead = points.slice(0, head).join('')
+    const keptTail = tail > 0 ? points.slice(Math.max(0, points.length - tail)).join('') : ''
+    return `${keptHead}\n\n${marker}\n${summary}\n${marker}\n\n${keptTail}`
+  }
+  // Mechanical: short fragments are dropped outright, long ones keep head/tail.
+  if (points.length <= head + tail + marker.length) return `[已省略 ${points.length} 字，原文见会话日志]`
+  return `${points.slice(0, head).join('')}\n\n${marker}\n\n${points.slice(points.length - tail).join('')}`
 }
 
 /**
