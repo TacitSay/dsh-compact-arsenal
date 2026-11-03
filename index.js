@@ -112,9 +112,11 @@ export function normalizeConfig(raw) {
   if (input.reasoning?.batchChars === undefined) reasoning.minChars = DEFAULTS.reasoning.minChars
   if (input.tools?.batchChars === undefined) tools.minChars = DEFAULTS.tools.minChars
   // An empty prompt means "use the built-in one", never "send nothing".
-  if (!total.prompt) total.prompt = DEFAULT_TOTAL_PROMPT
-  if (!reasoningModel.prompt) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
-  if (!toolsModel.prompt) toolsModel.prompt = DEFAULT_MODEL_PROMPT
+  // A prompt that is mostly `?` is what a non-UTF-8 writer leaves behind, so it
+  // is treated the same way and can never reach the model.
+  if (isUnusablePrompt(total.prompt)) total.prompt = DEFAULT_TOTAL_PROMPT
+  if (isUnusablePrompt(reasoningModel.prompt)) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
+  if (isUnusablePrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     total,
@@ -125,6 +127,26 @@ export function normalizeConfig(raw) {
       onlyTools: Array.isArray(input.tools?.onlyTools) ? input.tools.onlyTools.filter((v) => typeof v === 'string') : [],
     },
   }
+}
+
+/**
+ * Whether a stored prompt should be replaced by the built-in default.
+ *
+ * Two cases: empty, and mojibake left by a writer that was not UTF-8 (every
+ * non-ASCII character became `?`). A genuinely Chinese prompt keeps far fewer
+ * question marks, so a ratio test isolates the corrupted ones.
+ *
+ * @param {unknown} prompt - stored prompt value.
+ * @returns {boolean} true when the value must not be sent to a model.
+ */
+export function isUnusablePrompt(prompt) {
+  if (typeof prompt !== 'string') return true
+  const text = prompt.trim()
+  if (text === '') return true
+  const marks = (text.match(/\?/g) ?? []).length
+  if (marks < 5) return false
+  const meaningful = text.replace(/\s/g, '').length
+  return marks / Math.max(1, meaningful) >= 0.3
 }
 
 /**
