@@ -104,6 +104,13 @@ export function normalizeConfig(raw) {
   const reasoningModel = model(input.reasoning?.model)
   const toolsModel = model(input.tools?.model)
   const total = pick(DEFAULTS.total, input.total)
+  const reasoning = pick(DEFAULTS.reasoning, input.reasoning)
+  const tools = pick(DEFAULTS.tools, input.tools)
+  // Migration: before batching, `minChars` was a per-fragment trigger (2000).
+  // It is now a per-fragment floor, so a legacy value would silently skip every
+  // small fragment. A config without `batchChars` is legacy and is re-seeded.
+  if (input.reasoning?.batchChars === undefined) reasoning.minChars = DEFAULTS.reasoning.minChars
+  if (input.tools?.batchChars === undefined) tools.minChars = DEFAULTS.tools.minChars
   // An empty prompt means "use the built-in one", never "send nothing".
   if (!total.prompt) total.prompt = DEFAULT_TOTAL_PROMPT
   if (!reasoningModel.prompt) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
@@ -111,12 +118,9 @@ export function normalizeConfig(raw) {
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     total,
-    reasoning: {
-      ...pick(DEFAULTS.reasoning, input.reasoning),
-      model: reasoningModel,
-    },
+    reasoning: { ...reasoning, model: reasoningModel },
     tools: {
-      ...pick(DEFAULTS.tools, input.tools),
+      ...tools,
       model: toolsModel,
       onlyTools: Array.isArray(input.tools?.onlyTools) ? input.tools.onlyTools.filter((v) => typeof v === 'string') : [],
     },
