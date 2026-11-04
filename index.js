@@ -27,6 +27,7 @@ import {
   trimReasoning,
 } from './lib/policy.js'
 import { summarize, summarizeBatch, summarizeMiddle } from './lib/summarize.js'
+import { archiveRewrite, archiveRoot } from './lib/archive.js'
 
 export const name = 'compact-arsenal'
 
@@ -47,6 +48,8 @@ const DEFAULT_TOTAL_PROMPT = '把这段对话压缩成一份结构化的中文�
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
   enabled: true,
+  /** Empty means "$DSH_HOME/compact-arsenal" resolved at runtime, never a fixed path. */
+  archiveDir: '',
   total: {
     enabled: false,
     pressureRatio: 0.8,
@@ -131,6 +134,7 @@ export function normalizeConfig(raw) {
   if (isLegacyModelPrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
+    archiveDir: typeof input.archiveDir === 'string' ? input.archiveDir : DEFAULTS.archiveDir,
     total,
     reasoning: { ...reasoning, model: reasoningModel },
     tools: {
@@ -184,14 +188,15 @@ export function apply(ctx, rawConfig) {
 
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
-  const stats = { reasoning: 0, tools: 0, chars: 0, failed: 0 }
+  const stats = { reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 }
+  const archive = { root: archiveRoot(config.archiveDir), lastPath: null }
 
   if (config.enabled) {
     ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next()
       if (decision?.kind !== 'enter') return decision
       try {
-        rewrite(ctx, config, payload, lastProcessedTurn, stats)
+        rewrite(ctx, config, payload, lastProcessedTurn, stats, archive)
       } catch (error) {
         // A rewrite failure must never break the step.
         ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
@@ -202,7 +207,7 @@ export function apply(ctx, rawConfig) {
 
   // The panel needs a read/write channel, so these routes exist even while the
   // plugin is switched off: that is how it gets switched back on.
-  registerPanelRoutes(ctx, config, stats)
+  registerPanelRoutes(ctx, config, stats, archive)
 }
 
 /** Route prefix owned by this plugin. */
@@ -214,7 +219,7 @@ const API_PREFIX = '/compact-arsenal/api'
  * @param {any} config - the config this instance mounted with.
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  */
-function registerPanelRoutes(ctx, config, stats) {
+function registerPanelRoutes(ctx, config, stats, archive) {
   const webServer = ctx.get('webServer')
   const configEditor = ctx.get('configEditor')
   if (webServer === undefined) return
@@ -233,6 +238,8 @@ function registerPanelRoutes(ctx, config, stats) {
       stats,
       editable: configEditor !== undefined,
       lastFailure,
+      archiveRoot: archive.root,
+      lastArchivePath: archive.lastPath,
     })
   })
 
@@ -259,7 +266,15 @@ function registerPanelRoutes(ctx, config, stats) {
       return send(res, 500, { error: 'write-failed', message: String(error?.message ?? error) })
     }
     const totalApplied = await applyTotal(configEditor, next.total)
-    send(res, 200, { config: next, stats, editable: true, totalApplied })
+    send(res, 200, {
+      config: next,
+      stats,
+      editable: true,
+      totalApplied,
+      lastFailure,
+      archiveRoot: archive.root,
+      lastArchivePath: archive.lastPath,
+    })
   })
 }
 
@@ -331,7 +346,7 @@ function findOwnEntry(configEditor) {
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  * @returns {Promise<void>} resolves after the optional replacement landed.
  */
-async function totalPass(ctx, session, total, turn, signal, stats) {
+async function totalPass(ctx, session, total, turn, signal, stats, archive) {
   const retain = Number.isFinite(total.retainTurns) ? Math.max(0, Math.trunc(total.retainTurns)) : 2
   const cutoff = turn - retain
   if (cutoff <= 0) return
@@ -393,6 +408,20 @@ async function totalPass(ctx, session, total, turn, signal, stats) {
     stats.total = (stats.total ?? 0) + 1
     stats.chars += used
     ctx.logger?.debug?.(`[compact-arsenal] total: replaced ${picked.length} nodes (-${used} chars)`)
+    const archivedPath = await archiveRewrite({
+      root: archive.root,
+      sessionId: session.id,
+      kind: 'total',
+      method: 'model',
+      seq: startSeq,
+      original: transcript,
+      replacement: summary,
+      summary,
+    })
+    if (archivedPath !== undefined) {
+      stats.archived = (stats.archived ?? 0) + 1
+      archive.lastPath = archivedPath
+    }
   } catch (error) {
     ctx.logger?.warn?.(`[compact-arsenal] total replacement rejected: ${error?.message ?? error}`)
   }
@@ -426,8 +455,8 @@ function transcriptLine(event) {
  * @param {{ agent: { id: string }, turn: number }} payload - pre-step payload.
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
  */
-function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
-  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats)
+function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive) {
+  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive)
 }
 
 /**
@@ -439,7 +468,7 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats) {
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  * @returns {Promise<void>} resolves when every rewrite of this turn landed.
  */
-async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
+async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive) {
   if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
 
   const session = ctx.sessions.get(payload.agent.id)
@@ -450,7 +479,7 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
   lastProcessedTurn.set(session.id, payload.turn)
 
   if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
-    await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats)
+    await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)
   }
 
   const nodes = [...session.surface.nodes]
@@ -463,17 +492,19 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
   }
 
   if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal)
+    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive)
     stats.reasoning += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
+    stats.archived += saved.archived ?? 0
   }
 
   if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal)
+    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive)
     stats.tools += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
+    stats.archived += saved.archived ?? 0
   }
 }
 
@@ -549,7 +580,7 @@ function applyRewrittenText(session, event, seq, kind, text) {
  * @param {AbortSignal | undefined} signal - step cancellation.
  * @returns {Promise<{ items: number, chars: number }>} rewrites landed and text dropped.
  */
-async function compressSection(ctx, session, policy, kind, seqs, signal) {
+async function compressSection(ctx, session, policy, kind, seqs, signal, archive) {
   const marker = sectionMarker(kind, policy.mode === 'model')
   const minTotal = Number.isFinite(policy.minTotalChars) ? policy.minTotalChars : 15000
   const perItemFloor = Number.isFinite(policy.minChars) ? policy.minChars : 0
@@ -569,7 +600,7 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
     candidates.push({ seq, event, text })
     totalChars += text.length
   }
-  if (totalChars < minTotal) return { items: 0, chars: 0, failed: 0 }
+  if (totalChars < minTotal) return { items: 0, chars: 0, failed: 0, archived: 0 }
 
   const routed = session.requestContext?.() ?? {}
   const model = policy.model ?? {}
@@ -583,6 +614,7 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
   let items = 0
   let chars = 0
   let failed = 0
+  let archived = 0
   let index = 0
   while (index < candidates.length && items < maxItems && chars < maxChars) {
     const batch = []
@@ -614,9 +646,23 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
       }
       items += 1
       chars += Math.max(0, item.text.length - replacement.length)
+      const archivedPath = await archiveRewrite({
+        root: archive.root,
+        sessionId: session.id,
+        kind,
+        method: policy.mode === 'model' ? 'model' : 'mechanical',
+        seq: item.seq,
+        original: item.text,
+        replacement,
+        summary: summary ?? undefined,
+      })
+      if (archivedPath !== undefined) {
+        archived += 1
+        archive.lastPath = archivedPath
+      }
     }
   }
-  return { items, chars, failed }
+  return { items, chars, failed, archived }
 }
 
 /**

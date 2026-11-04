@@ -262,10 +262,13 @@ window.__ModuleLoader__.load({
 
     function Panel() {
       const [config, setConfig] = useState(emptyConfig)
-      const [stats, setStats] = useState({ reasoning: 0, tools: 0, chars: 0 })
+      const [stats, setStats] = useState({ reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 })
       const [status, setStatus] = useState('loading')
       const [message, setMessage] = useState('')
       const [totalApplied, setTotalApplied] = useState(null)
+      const [lastFailure, setLastFailure] = useState(null)
+      const [archiveRoot, setArchiveRoot] = useState(null)
+      const [lastArchivePath, setLastArchivePath] = useState(null)
       const timer = useRef(null)
       const latest = useRef(emptyConfig)
 
@@ -278,7 +281,10 @@ window.__ModuleLoader__.load({
             const next = mergeConfig(body.config)
             setConfig(next)
             latest.current = next
-            setStats(body.stats || { reasoning: 0, tools: 0, chars: 0 })
+            setStats(body.stats || { reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 })
+            setLastFailure(body.lastFailure ?? null)
+            setArchiveRoot(body.archiveRoot ?? null)
+            setLastArchivePath(body.lastArchivePath ?? null)
             setStatus(body.editable === false ? 'readonly' : 'ready')
           })
           .catch((error) => {
@@ -305,6 +311,9 @@ window.__ModuleLoader__.load({
               setConfig(next)
               latest.current = next
               if (body.stats) setStats(body.stats)
+              setLastFailure(body.lastFailure ?? null)
+              if (body.archiveRoot) setArchiveRoot(body.archiveRoot)
+              if (body.lastArchivePath !== undefined) setLastArchivePath(body.lastArchivePath)
               setTotalApplied(body.totalApplied === undefined ? null : body.totalApplied)
               setStatus('ready')
               setMessage('已保存')
@@ -463,11 +472,24 @@ window.__ModuleLoader__.load({
         },
       }, [total, reasoning, tools])
 
-      const statsLine = h('p', {
-        style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
-      }, config.enabled
-        ? `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`
-        : '总开关已关闭：三个板块都不会执行。')
+      const statsLine = h('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: 4 },
+      }, [
+        h('p', {
+          key: 'run',
+          style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
+        }, config.enabled
+          ? `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`
+          : '总开关已关闭：三个板块都不会执行。'),
+        stats.failed > 0
+          ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },
+            `失败 ${stats.failed} 次（未落盘，不计入节省）：${lastFailure || '原因未记录'}`)
+          : null,
+        archiveRoot
+          ? h('p', { key: 'archive', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6, wordBreak: 'break-all' } },
+            `归档目录：${archiveRoot}${lastArchivePath ? `（最新：${lastArchivePath}）` : ''}（共 ${stats.archived ?? 0} 份）`)
+          : null,
+      ])
 
       const statusText = status === 'loading' ? '正在读取配置…'
         : status === 'saving' ? '正在保存…'
