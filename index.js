@@ -16,8 +16,11 @@
  */
 
 import {
+  MODEL_REASONING_MARKER,
+  MODEL_TOOL_MARKER,
   REASONING_MARKER,
   TOOL_MARKER,
+  alreadyRewritten,
   clearReasoning,
   describeChange,
   pruneToolContent,
@@ -181,7 +184,7 @@ export function apply(ctx, rawConfig) {
 
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
-  const stats = { reasoning: 0, tools: 0, chars: 0 }
+  const stats = { reasoning: 0, tools: 0, chars: 0, failed: 0 }
 
   if (config.enabled) {
     ctx.on('agent/pre-step', async (payload, next) => {
@@ -229,6 +232,7 @@ function registerPanelRoutes(ctx, config, stats) {
       config,
       stats,
       editable: configEditor !== undefined,
+      lastFailure,
     })
   })
 
@@ -460,24 +464,26 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats) {
 
   if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
     const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal)
-    if (saved.chars > 0) {
-      stats.reasoning += saved.items
-      stats.chars += saved.chars
-    }
+    stats.reasoning += saved.items
+    stats.failed += saved.failed ?? 0
+    stats.chars += saved.chars
   }
 
   if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
     const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal)
-    if (saved.chars > 0) {
-      stats.tools += saved.items
-      stats.chars += saved.chars
-    }
+    stats.tools += saved.items
+    stats.failed += saved.failed ?? 0
+    stats.chars += saved.chars
   }
 }
 
-/** Marker text per section, used both when writing and when skipping done work. */
-function sectionMarker(kind) {
-  return kind === 'tools' ? TOOL_MARKER : REASONING_MARKER
+/** Most recent rewrite rejection, surfaced on the panel for diagnosis. */
+let lastFailure = null
+
+/** Marker text per section, and per method: model-written text is distinguishable. */
+function sectionMarker(kind, fromModel) {
+  if (kind === 'tools') return fromModel ? MODEL_TOOL_MARKER : TOOL_MARKER
+  return fromModel ? MODEL_REASONING_MARKER : REASONING_MARKER
 }
 
 /**
@@ -544,8 +550,7 @@ function applyRewrittenText(session, event, seq, kind, text) {
  * @returns {Promise<{ items: number, chars: number }>} rewrites landed and text dropped.
  */
 async function compressSection(ctx, session, policy, kind, seqs, signal) {
-  const marker = sectionMarker(kind)
-  const markerKey = marker.trim()
+  const marker = sectionMarker(kind, policy.mode === 'model')
   const minTotal = Number.isFinite(policy.minTotalChars) ? policy.minTotalChars : 15000
   const perItemFloor = Number.isFinite(policy.minChars) ? policy.minChars : 0
   const maxItems = Number.isFinite(policy.maxItems) ? policy.maxItems : 12
@@ -559,12 +564,12 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
     if (event === undefined) continue
     const text = sectionText(event, kind)
     if (text === '') continue
-    if (text.includes(markerKey)) continue
+    if (alreadyRewritten(text)) continue
     if (perItemFloor > 0 && text.length < perItemFloor) continue
     candidates.push({ seq, event, text })
     totalChars += text.length
   }
-  if (totalChars < minTotal) return { items: 0, chars: 0 }
+  if (totalChars < minTotal) return { items: 0, chars: 0, failed: 0 }
 
   const routed = session.requestContext?.() ?? {}
   const model = policy.model ?? {}
@@ -572,11 +577,12 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
     ...model,
     provider: model.provider || routed.provider || '',
     model: model.model || routed.model || '',
-    prompt: model.prompt || '把下面这段内容压缩成不超过 200 字的要点，保留文件名、命令、报错原文和结论，不要评论。只输出要点。',
+    prompt: model.prompt || '保留文件名、命令、报错原文、关键数值与结论；语言简洁，不要评论，不要提及压缩本身。',
   }
 
   let items = 0
   let chars = 0
+  let failed = 0
   let index = 0
   while (index < candidates.length && items < maxItems && chars < maxChars) {
     const batch = []
@@ -593,11 +599,16 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
 
     for (let i = 0; i < batch.length; i += 1) {
       const item = batch[i]
-      const replacement = buildReplacement(item.text, policy, marker, summaries === null ? null : summaries[i])
+      const summary = summaries === null ? null : summaries[i]
+      const replacement = buildReplacement(item.text, policy, marker, summary)
       if (replacement === null) continue
       try {
+        // The append is the only proof that the rewrite landed, so the counters
+        // move strictly after it returns.
         applyRewrittenText(session, item.event, item.seq, kind, replacement)
       } catch (error) {
+        failed += 1
+        lastFailure = `#${item.seq}: ${error?.message ?? error}`
         ctx.logger?.warn?.(`[compact-arsenal] ${kind} replacement rejected: ${error?.message ?? error}`)
         continue
       }
@@ -605,7 +616,7 @@ async function compressSection(ctx, session, policy, kind, seqs, signal) {
       chars += Math.max(0, item.text.length - replacement.length)
     }
   }
-  return { items, chars }
+  return { items, chars, failed }
 }
 
 /**
