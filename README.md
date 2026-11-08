@@ -32,6 +32,9 @@
 ## 安装
 
 ```sh
+# npm 包（推荐，DSH 内置 Plugin Hub 可见）
+dsh plugin --profile web add dsh-compact-arsenal
+
 # GitHub 源（把 web 换成你的 profile 名）
 dsh plugin --profile web add "github:TacitSay/dsh-compact-arsenal#main"
 
