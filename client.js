@@ -269,6 +269,7 @@ window.__ModuleLoader__.load({
       const [lastFailure, setLastFailure] = useState(null)
       const [archiveRoot, setArchiveRoot] = useState(null)
       const [lastArchivePath, setLastArchivePath] = useState(null)
+      const [pressure, setPressure] = useState(null)
       const timer = useRef(null)
       const latest = useRef(emptyConfig)
 
@@ -285,6 +286,7 @@ window.__ModuleLoader__.load({
             setLastFailure(body.lastFailure ?? null)
             setArchiveRoot(body.archiveRoot ?? null)
             setLastArchivePath(body.lastArchivePath ?? null)
+            setPressure(body.pressure ?? null)
             setStatus(body.editable === false ? 'readonly' : 'ready')
           })
           .catch((error) => {
@@ -314,6 +316,7 @@ window.__ModuleLoader__.load({
               setLastFailure(body.lastFailure ?? null)
               if (body.archiveRoot) setArchiveRoot(body.archiveRoot)
               if (body.lastArchivePath !== undefined) setLastArchivePath(body.lastArchivePath)
+              if (body.pressure !== undefined) setPressure(body.pressure)
               setTotalApplied(body.totalApplied === undefined ? null : body.totalApplied)
               setStatus('ready')
               setMessage('已保存')
@@ -484,6 +487,12 @@ window.__ModuleLoader__.load({
         stats.failed > 0
           ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },
             `失败 ${stats.failed} 次（未落盘，不计入节省）：${lastFailure || '原因未记录'}`)
+          : null,
+        pressure && typeof pressure.estimated === 'number' && pressure.estimated > 0
+          ? h('p', { key: 'pressure', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
+            pressure.window
+              ? `上下文压力：真实 ${(pressure.reported ?? pressure.estimated).toLocaleString()}（${((pressure.reported ?? pressure.estimated) / pressure.window * 100).toFixed(1)}%）· 估算 ${pressure.estimated.toLocaleString()}（${(pressure.estimated / pressure.window * 100).toFixed(1)}%）· 窗口 ${pressure.window.toLocaleString()}`
+              : `上下文压力：真实 ${(pressure.reported ?? pressure.estimated).toLocaleString()} · 估算 ${pressure.estimated.toLocaleString()}`)
           : null,
         archiveRoot
           ? h('p', { key: 'archive', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6, wordBreak: 'break-all' } },

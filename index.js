@@ -189,6 +189,11 @@ export function apply(ctx, rawConfig) {
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
   const stats = { reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 }
+  /**
+   * Last observed pressure inputs, so the panel can show both the provider's
+   * number and the heuristic estimate that the gate falls back to.
+   */
+  const pressure = { reported: null, estimated: 0, window: null }
   const archive = { root: archiveRoot(config.archiveDir), lastPath: null }
 
   if (config.enabled) {
@@ -196,7 +201,7 @@ export function apply(ctx, rawConfig) {
       const decision = await next()
       if (decision?.kind !== 'enter') return decision
       try {
-        rewrite(ctx, config, payload, lastProcessedTurn, stats, archive)
+        rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
       } catch (error) {
         // A rewrite failure must never break the step.
         ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
@@ -207,7 +212,7 @@ export function apply(ctx, rawConfig) {
 
   // The panel needs a read/write channel, so these routes exist even while the
   // plugin is switched off: that is how it gets switched back on.
-  registerPanelRoutes(ctx, config, stats, archive)
+  registerPanelRoutes(ctx, config, stats, archive, pressure)
 }
 
 /** Route prefix owned by this plugin. */
@@ -219,7 +224,7 @@ const API_PREFIX = '/compact-arsenal/api'
  * @param {any} config - the config this instance mounted with.
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  */
-function registerPanelRoutes(ctx, config, stats, archive) {
+function registerPanelRoutes(ctx, config, stats, archive, pressure) {
   const webServer = ctx.get('webServer')
   const configEditor = ctx.get('configEditor')
   if (webServer === undefined) return
@@ -240,6 +245,7 @@ function registerPanelRoutes(ctx, config, stats, archive) {
       lastFailure,
       archiveRoot: archive.root,
       lastArchivePath: archive.lastPath,
+      pressure,
     })
   })
 
@@ -274,6 +280,7 @@ function registerPanelRoutes(ctx, config, stats, archive) {
       lastFailure,
       archiveRoot: archive.root,
       lastArchivePath: archive.lastPath,
+      pressure,
     })
   })
 }
@@ -455,8 +462,8 @@ function transcriptLine(event) {
  * @param {{ agent: { id: string }, turn: number }} payload - pre-step payload.
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
  */
-function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive) {
-  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive)
+function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure) {
+  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
 }
 
 /**
@@ -468,7 +475,7 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive) {
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  * @returns {Promise<void>} resolves when every rewrite of this turn landed.
  */
-async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive) {
+async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure) {
   if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
 
   const session = ctx.sessions.get(payload.agent.id)
@@ -477,6 +484,12 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   if (lastProcessedTurn.get(session.id) === payload.turn) return
 
   lastProcessedTurn.set(session.id, payload.turn)
+
+  // Snapshot the inputs once per turn so the panel can explain a gate decision.
+  const snapshot = pressureSnapshot(ctx, session)
+  pressure.reported = snapshot.reported ?? null
+  pressure.estimated = snapshot.estimated
+  pressure.window = session.requestContext?.()?.contextWindow ?? null
 
   if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
     await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)
@@ -716,9 +729,47 @@ function underPressure(ctx, session, ratio) {
   if (typeof window !== 'number' || window <= 0) return false
   const r = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0.75
   if (r <= 0) return true
+  const used = currentPressureTokens(ctx, session)
+  return used >= window * r
+}
+
+/**
+ * Tokens the next request is expected to cost, preferring the provider's own
+ * count over the heuristic estimate.
+ *
+ * The heuristic prices text at ~4 characters per token, which undercounts CJK
+ * and JSON by roughly 12%: a session measured at 0.519 of its window can look
+ * like 0.454 and never trip the gate. `contextPressure()` carries the prompt
+ * size the provider last reported, so that figure wins whenever it exists.
+ *
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @returns {{ used: number, reported: number | undefined, estimated: number }} the pressure inputs.
+ */
+function pressureSnapshot(ctx, session) {
+  let reported
+  try {
+    const pressure = ctx.tokenMeter?.contextPressure?.(session)
+    if (pressure && typeof pressure === 'object') {
+      const value = pressure.projectedTokens ?? pressure.pressureTokens
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) reported = value
+    }
+  } catch {
+    // A missing projection only means "fall back to the estimate".
+  }
   const measured = ctx.tokenMeter?.measure?.(session)
-  const total = measured?.totalTokens ?? 0
-  return total >= window * r
+  const estimated = typeof measured?.totalTokens === 'number' ? measured.totalTokens : 0
+  return { used: reported ?? estimated, reported, estimated }
+}
+
+/**
+ * Just the token count the gate compares against the window.
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @returns {number} pressure tokens.
+ */
+function currentPressureTokens(ctx, session) {
+  return pressureSnapshot(ctx, session).used
 }
 
 /**

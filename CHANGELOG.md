@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-11-10
+
+### Fixed
+
+- The pressure gate now reads the provider-reported prompt size
+  (`ctx.tokenMeter.contextPressure()`), falling back to the heuristic estimate
+  only when no provider figure exists. The heuristic prices text at ~4
+  characters per token, which undercounts CJK and JSON by about 12%: a session
+  measured at 51.9% of its window was read as 45.4% and never tripped a 0.5
+  threshold.
+- The panel shows both numbers (真实 / 估算) so a gate decision can be explained.
+
+### Added
+
+- `docs/threshold-notes.md`: a field record of one session, the exact crossing
+  sample, every rewrite it produced, and the two measurement bases side by side.
+
 ## [0.2.0] — 2026-11-03
 
 ### Added
