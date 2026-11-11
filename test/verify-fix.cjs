@@ -63,7 +63,22 @@ check(
   'provider-reported prompt size is read',
 )
 
-// 7. Dead single-item rewriters are gone.
+// 7. Pressure is measured before any gate short-circuits.
+const rewriteBlock = src.slice(src.indexOf('async function rewriteAsync'), src.indexOf('function currentPosition'))
+const measureIdx = rewriteBlock.indexOf('pressureSnapshot(ctx, session)')
+const earlyReturnIdx = rewriteBlock.indexOf('if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return')
+check(
+  'pressure measured before the disabled short-circuit',
+  measureIdx !== -1 && earlyReturnIdx !== -1 && measureIdx < earlyReturnIdx,
+  `measure@${measureIdx} < earlyReturn@${earlyReturnIdx}`,
+)
+check(
+  'panel state carries a version',
+  /version: PACKAGE_VERSION/.test(src),
+  'GET /state returns version',
+)
+
+// 8. Dead single-item rewriters are gone.
 check(
   'dead rewriters removed',
   !/function rewriteAssistantAsync|function rewriteToolResultAsync|async function rebuildWithModel/.test(src),

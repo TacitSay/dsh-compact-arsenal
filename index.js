@@ -27,6 +27,12 @@ import { archiveRewrite, archiveRoot } from './lib/archive.js'
 
 export const name = 'compact-arsenal'
 
+/**
+ * Bumped in lockstep with `package.json` so the panel can show which build is
+ * actually running — a stale install is otherwise invisible.
+ */
+export const PACKAGE_VERSION = '0.4.0'
+
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
 
@@ -175,6 +181,33 @@ function isLegacyModelPrompt(prompt) {
 }
 
 /**
+ * Recompute the pressure snapshot from whichever agent is live.
+ *
+ * The step hook updates the same object at most once per turn; a panel read
+ * should reflect the session as it stands now, including when every section is
+ * disabled and the hook short-circuits.
+ *
+ * @param {any} ctx - plugin context.
+ * @param {{ reported: number | null, estimated: number, window: number | null }} pressure - snapshot to update.
+ * @returns {void}
+ */
+function refreshPressure(ctx, pressure) {
+  try {
+    const agents = ctx.get('agents')?.list?.() ?? []
+    const agent = agents[agents.length - 1]
+    if (agent === undefined) return
+    const session = ctx.sessions.get(agent.id)
+    if (session === undefined) return
+    const snapshot = pressureSnapshot(ctx, session)
+    pressure.reported = snapshot.reported ?? null
+    pressure.estimated = snapshot.estimated
+    pressure.window = session.requestContext?.()?.contextWindow ?? null
+  } catch {
+    // A missing agent registry only means "nothing live to measure".
+  }
+}
+
+/**
  * Register the rewrite pass on the per-step hook.
  * @param {any} ctx - plugin context.
  * @param {any} rawConfig - the row's config value.
@@ -250,7 +283,11 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
 
   route(`${API_PREFIX}/state`, (req, res) => {
     if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
+    // Fold any live agent into the snapshot at read time: the step hook only
+    // updates it once per turn, and the panel should not show a stale number.
+    refreshPressure(ctx, pressure)
     send(res, 200, {
+      version: PACKAGE_VERSION,
       config,
       stats,
       editable: configEditor !== undefined,
@@ -488,20 +525,21 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressu
  * @returns {Promise<void>} resolves when every rewrite of this turn landed.
  */
 async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure) {
-  if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
-
   const session = ctx.sessions.get(payload.agent.id)
   if (session === undefined) return
 
-  if (lastProcessedTurn.get(session.id) === payload.turn) return
-
-  lastProcessedTurn.set(session.id, payload.turn)
-
-  // Snapshot the inputs once per turn so the panel can explain a gate decision.
+  // Measure before any gate: the panel must be able to explain why nothing ran,
+  // so a fully disabled plugin still reports the current pressure.
   const snapshot = pressureSnapshot(ctx, session)
   pressure.reported = snapshot.reported ?? null
   pressure.estimated = snapshot.estimated
   pressure.window = session.requestContext?.()?.contextWindow ?? null
+
+  if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
+
+  if (lastProcessedTurn.get(session.id) === payload.turn) return
+
+  lastProcessedTurn.set(session.id, payload.turn)
 
   if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
     await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)

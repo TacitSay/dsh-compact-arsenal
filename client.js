@@ -270,6 +270,7 @@ window.__ModuleLoader__.load({
       const [archiveRoot, setArchiveRoot] = useState(null)
       const [lastArchivePath, setLastArchivePath] = useState(null)
       const [pressure, setPressure] = useState(null)
+      const [runtimeVersion, setRuntimeVersion] = useState(null)
       const timer = useRef(null)
       const latest = useRef(emptyConfig)
 
@@ -287,6 +288,7 @@ window.__ModuleLoader__.load({
             setArchiveRoot(body.archiveRoot ?? null)
             setLastArchivePath(body.lastArchivePath ?? null)
             setPressure(body.pressure ?? null)
+            setRuntimeVersion(body.version ?? null)
             setStatus(body.editable === false ? 'readonly' : 'ready')
           })
           .catch((error) => {
@@ -317,6 +319,7 @@ window.__ModuleLoader__.load({
               if (body.archiveRoot) setArchiveRoot(body.archiveRoot)
               if (body.lastArchivePath !== undefined) setLastArchivePath(body.lastArchivePath)
               if (body.pressure !== undefined) setPressure(body.pressure)
+              if (body.version) setRuntimeVersion(body.version)
               setTotalApplied(body.totalApplied === undefined ? null : body.totalApplied)
               setStatus('ready')
               setMessage('已保存')
@@ -506,13 +509,49 @@ window.__ModuleLoader__.load({
             : status === 'readonly' ? '配置写入不可用（只读）'
               : (message || '已连接')
 
+      /**
+       * Version badge beside the title.
+       *
+       * The update affordance is deliberately inert for now: the market owns
+       * package updates, so this only reserves the seat and the label. When an
+       * update check exists, it flips `updateAvailable` and the same button
+       * becomes actionable without moving anything.
+       */
+      const versionBadge = h('div', {
+        key: 'version',
+        style: { display: 'flex', alignItems: 'center', gap: 6 },
+      }, [
+        h('span', {
+          key: 'v',
+          title: runtimeVersion ? `运行中：${runtimeVersion}` : '运行中版本未知',
+          style: {
+            fontSize: 11, padding: '1px 7px', borderRadius: 999, color: MUTED,
+            border: `1px solid ${LINE}`, fontVariantNumeric: 'tabular-nums',
+          },
+        }, runtimeVersion ? `v${runtimeVersion}` : 'v?'),
+        h('button', {
+          key: 'check',
+          type: 'button',
+          disabled: true,
+          title: '检查更新（预留：将由插件市场提供）',
+          style: {
+            fontSize: 11, padding: '1px 8px', borderRadius: 999,
+            border: `1px solid ${LINE}`, background: 'transparent',
+            color: MUTED, cursor: 'not-allowed', opacity: 0.55,
+          },
+        }, '检查更新'),
+      ])
+
       const header = h('header', {
         key: 'hdr',
         style: { display: 'flex', flexDirection: 'column', gap: 8 },
       }, [
         h('div', { key: 'row', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } }, [
           h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
-            h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
+            h('div', { key: 'title', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+              h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
+              versionBadge,
+            ]),
             h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
               '开关即生效，参数改完自动保存。每个板块有自己的触发阈值。'),
           ]),

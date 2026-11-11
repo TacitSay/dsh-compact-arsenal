@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-11-11
+
+### Fixed
+
+- **The pressure readout never appeared while all sections were disabled.**
+  `rewriteAsync()` short-circuited before measuring, so a plugin with every
+  switch off reported nothing. Measurement now happens first, and the panel
+  endpoint re-reads it from the live agent on every request instead of relying
+  on the once-per-turn hook value.
+
+### Added
+
+- **Version badge in the panel header** (`v0.4.0`), sourced from the running
+  plugin rather than `package.json`, so a stale install is visible at a glance.
+- A disabled **检查更新** button beside it, reserving the seat for a future
+  update check; the market owns package updates, so this stays inert until one
+  exists.
+
 ## [0.3.0] — 2026-11-11
 
 ### Fixed
