@@ -1,6 +1,6 @@
 {
   "name": "dsh-compact-arsenal",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Configurable context compaction for DeepSeek Harness: three independent sections — whole-context checkpoint, reasoning compression and tool-output pruning, each with its own switch, threshold and method, plus a left-sidebar panel.",
   "icon": "icon.svg",
   "author": "TacitSay",
@@ -38,7 +38,7 @@
     "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs && node test/verify-fix.cjs index.js"
   },
   "keywords": [
     "deepseek-harness",

@@ -21,12 +21,8 @@ import {
   REASONING_MARKER,
   TOOL_MARKER,
   alreadyRewritten,
-  clearReasoning,
-  describeChange,
-  pruneToolContent,
-  trimReasoning,
 } from './lib/policy.js'
-import { summarize, summarizeBatch, summarizeMiddle } from './lib/summarize.js'
+import { summarize, summarizeBatch } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
 
 export const name = 'compact-arsenal'
@@ -197,14 +193,30 @@ export function apply(ctx, rawConfig) {
   const archive = { root: archiveRoot(config.archiveDir), lastPath: null }
 
   if (config.enabled) {
+    /**
+     * Sessions with a rewrite in flight.
+     *
+     * `lastProcessedTurn` is marked synchronously when a rewrite starts, but the
+     * append lands seconds later (a model batch can take a while). Without this
+     * guard two turns of the same session can rewrite concurrently, which writes
+     * a replacement whose `turn` belongs to a turn that has already ended.
+     */
+    const inFlight = new Set()
     ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next()
       if (decision?.kind !== 'enter') return decision
+      if (inFlight.has(payload.agent.id)) return decision
+      inFlight.add(payload.agent.id)
       try {
-        rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
+        // Awaiting matters: a rewrite left running after this handler returns
+        // can append while its turn is closing, and a rejection would escape
+        // this catch entirely.
+        await rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
       } catch (error) {
         // A rewrite failure must never break the step.
         ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
+      } finally {
+        inFlight.delete(payload.agent.id)
       }
       return decision
     })
@@ -504,8 +516,22 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
     else if (event?.type === 'tool/result') toolSeqs.push(seq)
   }
 
+  /**
+   * Whether the turn that started this pass is still the session's open turn.
+   *
+   * A surface replacement is only valid while its turn is open: writing after
+   * `turn/end` leaves a row in the gap between turns, which the log loader
+   * rejects on the next resume. Re-checking before every append keeps a slow
+   * model batch from writing into a turn that already closed.
+   */
+  const stillOpen = () => {
+    if (payload.signal?.aborted) return false
+    const open = openTurnOf(session)
+    return open === undefined || open === payload.turn
+  }
+
   if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive)
+    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive, payload.turn, stillOpen)
     stats.reasoning += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
@@ -513,7 +539,7 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   }
 
   if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive)
+    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive, payload.turn, stillOpen)
     stats.tools += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
@@ -554,15 +580,46 @@ function sectionText(event, kind) {
  * @param {string} text - replacement text.
  * @returns {void}
  */
-function applyRewrittenText(session, event, seq, kind, text) {
+/**
+ * Copy of `event.data.turn` replaced by the turn that is open right now.
+ *
+ * A surface replacement must carry the turn that owns the write, not the turn
+ * the replaced node was created in: the node may be dozens of turns old, and a
+ * row claiming a closed turn either fails the log's relationship check or slips
+ * through while claiming a turn that does not match its position.
+ *
+ * @param {any} session - live session.
+ * @param {any} event - the node being replaced.
+ * @param {number} currentTurn - turn owning this write.
+ * @returns {{ turn: number, step: number }} position fields for the new row.
+ */
+function currentPosition(session, event, currentTurn) {
+  const turn = Number.isFinite(currentTurn) ? currentTurn : event.data.turn
+  // Keep the step only when the write belongs to the same turn as the node;
+  // otherwise the step number of an old turn is meaningless.
+  const step = turn === event.data.turn && Number.isFinite(event.data.step) ? event.data.step : 1
+  return { turn, step }
+}
+
+/**
+ * Replace one event's text with a rewritten version, keeping message identity.
+ * @param {any} session - live session.
+ * @param {any} event - the surface event being replaced.
+ * @param {number} seq - its surface seq.
+ * @param {'reasoning' | 'tools'} kind - section kind.
+ * @param {string} text - replacement text.
+ * @param {number} currentTurn - turn that owns this write.
+ * @returns {void}
+ */
+function applyRewrittenText(session, event, seq, kind, text, currentTurn) {
   const blocks = event.data?.message?.content
   const wanted = kind === 'tools' ? 'text' : 'reasoning'
   const rich = blocks.filter((block) => block?.type !== wanted)
   const message = { ...event.data.message, content: [{ type: wanted, text }, ...rich] }
+  const position = currentPosition(session, event, currentTurn)
   if (kind === 'tools') {
     session.append('tool/result', {
-      turn: event.data.turn,
-      step: event.data.step,
+      ...position,
       message,
       ...(event.data.error === undefined ? {} : { error: event.data.error }),
       ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
@@ -570,8 +627,7 @@ function applyRewrittenText(session, event, seq, kind, text) {
     return
   }
   session.append('assistant/message', {
-    turn: event.data.turn,
-    step: event.data.step,
+    ...position,
     message,
     ...(event.data.usage === undefined ? {} : { usage: event.data.usage }),
     stream: event.data.stream ?? [],
@@ -591,9 +647,12 @@ function applyRewrittenText(session, event, seq, kind, text) {
  * @param {'reasoning' | 'tools'} kind - section kind.
  * @param {readonly number[]} seqs - candidate surface seqs, oldest first.
  * @param {AbortSignal | undefined} signal - step cancellation.
- * @returns {Promise<{ items: number, chars: number }>} rewrites landed and text dropped.
+ * @param {{ root: string, lastPath: string | null }} archive - archive target.
+ * @param {number} currentTurn - turn that owns these writes.
+ * @param {(() => boolean) | undefined} stillOpen - re-checked before every append.
+ * @returns {Promise<{ items: number, chars: number, failed: number, archived: number }>} what landed.
  */
-async function compressSection(ctx, session, policy, kind, seqs, signal, archive) {
+async function compressSection(ctx, session, policy, kind, seqs, signal, archive, currentTurn, stillOpen) {
   const marker = sectionMarker(kind, policy.mode === 'model')
   const minTotal = Number.isFinite(policy.minTotalChars) ? policy.minTotalChars : 15000
   const perItemFloor = Number.isFinite(policy.minChars) ? policy.minChars : 0
@@ -630,6 +689,10 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
   let archived = 0
   let index = 0
   while (index < candidates.length && items < maxItems && chars < maxChars) {
+    // The step may have been cancelled while a model batch was in flight; never
+    // write into a session whose turn has been torn down.
+    signal?.throwIfAborted?.()
+    if (stillOpen !== undefined && !stillOpen()) return { items, chars, failed, archived }
     const batch = []
     let batchSize = 0
     while (index < candidates.length && batch.length < 8 && batchSize < batchChars) {
@@ -641,8 +704,11 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
     const summaries = policy.mode === 'model'
       ? await summarizeBatchSafe(ctx, modelCfg, batch.map((item) => item.text), signal)
       : null
+    signal?.throwIfAborted?.()
 
     for (let i = 0; i < batch.length; i += 1) {
+      signal?.throwIfAborted?.()
+      if (stillOpen !== undefined && !stillOpen()) return { items, chars, failed, archived }
       const item = batch[i]
       const summary = summaries === null ? null : summaries[i]
       const replacement = buildReplacement(item.text, policy, marker, summary)
@@ -650,7 +716,7 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
       try {
         // The append is the only proof that the rewrite landed, so the counters
         // move strictly after it returns.
-        applyRewrittenText(session, item.event, item.seq, kind, replacement)
+        applyRewrittenText(session, item.event, item.seq, kind, replacement, currentTurn)
       } catch (error) {
         failed += 1
         lastFailure = `#${item.seq}: ${error?.message ?? error}`
@@ -773,6 +839,39 @@ function currentPressureTokens(ctx, session) {
 }
 
 /**
+ * The turn that is currently open in a session, read from its own log.
+ *
+ * The last `turn/start` wins unless a matching `turn/end` closed it. Returned
+ * as `undefined` when the log carries no turn markers yet, so callers can treat
+ * "cannot tell" as "do not block".
+ *
+ * @param {any} session - live session.
+ * @returns {number | undefined} the open turn number.
+ */
+function openTurnOf(session) {
+  // Turn markers are log-only events, never surface nodes, so they are read from
+  // the log tail. Scanning backwards keeps this O(recent), not O(session).
+  const end = typeof session.seq === 'number' ? session.seq : 0
+  let seen = 0
+  let lastStart
+  for (let seq = end; seq >= 0; seq -= 1) {
+    const event = session.eventAt?.(seq)
+    if (event === undefined) continue
+    seen += 1
+    if (event.type === 'turn/end' && lastStart === undefined && event.data?.turn !== undefined) {
+      // The newest marker is an end: that turn is already closed.
+      return undefined
+    }
+    if (event.type === 'turn/start') {
+      lastStart = event.data?.turn
+      return lastStart
+    }
+    if (seen >= 400) break
+  }
+  return undefined
+}
+
+/**
  * All but the most recent `keep` entries.
  * @param {readonly number[]} seqs - ordered surface seqs.
  * @param {number} keep - how many trailing entries to leave untouched.
@@ -781,189 +880,4 @@ function currentPressureTokens(ctx, session) {
 function dropRecent(seqs, keep) {
   const n = Number.isFinite(keep) ? Math.max(0, Math.trunc(keep)) : 0
   return n <= 0 ? [...seqs] : seqs.slice(0, Math.max(0, seqs.length - n))
-}
-
-/**
- * Replace one assistant message with the same message minus (or with trimmed) reasoning.
- * @param {any} ctx - plugin context.
- * @param {any} session - live session.
- * @param {number} seq - surface seq of the assistant message.
- * @param {any} policy - reasoning section config.
- * @returns {number} characters removed, or 0 when nothing was rewritten.
- */
-function rewriteAssistant(ctx, session, seq, policy, signal) {
-  return rewriteAssistantAsync(ctx, session, seq, policy, signal)
-}
-
-/**
- * Async body of {@link rewriteAssistant}: `model` mode summarizes the elided middle.
- * @param {any} ctx - plugin context.
- * @param {any} session - live session.
- * @param {number} seq - surface seq of the assistant message.
- * @param {any} policy - reasoning section config.
- * @param {AbortSignal | undefined} signal - step cancellation.
- * @returns {Promise<number>} characters removed, or 0 when nothing was rewritten.
- */
-async function rewriteAssistantAsync(ctx, session, seq, policy, signal) {
-  const event = session.eventAt(seq)
-  if (event === undefined) return 0
-  const message = event.data?.message
-  if (message?.role !== 'assistant' || !Array.isArray(message.content)) return 0
-
-  let next = policy.mode === 'clear'
-    ? clearReasoning(message.content)
-    : trimReasoning(message.content, policy)
-
-  if (policy.mode === 'model') {
-    next = await rebuildWithModel(ctx, message.content, policy, signal, 'reasoning', session.requestContext?.() ?? {})
-  }
-  if (next === null) return 0
-
-  session.append(
-    'assistant/message',
-    {
-      turn: event.data.turn,
-      step: event.data.step,
-      message: { ...message, content: next },
-      ...(event.data.usage === undefined ? {} : { usage: event.data.usage }),
-      stream: event.data.stream ?? [],
-    },
-    { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq } },
-  )
-  const before = measureBlocks(message.content)
-  const after = measureBlocks(next)
-  ctx.logger?.debug?.(describeChange('reasoning', before, after))
-  return Math.max(0, before - after)
-}
-
-/**
- * Replace one oversized tool result with its head and tail.
- * @param {any} ctx - plugin context.
- * @param {any} session - live session.
- * @param {number} seq - surface seq of the tool result.
- * @param {any} policy - tools section config.
- * @returns {number} characters removed, or 0 when nothing was rewritten.
- */
-function rewriteToolResult(ctx, session, seq, policy, signal) {
-  return rewriteToolResultAsync(ctx, session, seq, policy, signal)
-}
-
-/**
- * Async body of {@link rewriteToolResult}: `model` mode summarizes the elided middle.
- * @param {any} ctx - plugin context.
- * @param {any} session - live session.
- * @param {number} seq - surface seq of the tool result.
- * @param {any} policy - tools section config.
- * @param {AbortSignal | undefined} signal - step cancellation.
- * @returns {Promise<number>} characters removed, or 0 when nothing was rewritten.
- */
-async function rewriteToolResultAsync(ctx, session, seq, policy, signal) {
-  const event = session.eventAt(seq)
-  if (event === undefined) return 0
-  const message = event.data?.message
-  if (message?.role !== 'tool' || !Array.isArray(message.content)) return 0
-  if (Array.isArray(policy.onlyTools) && policy.onlyTools.length > 0) {
-    const toolName = resolveToolName(session, event)
-    if (toolName === undefined || !policy.onlyTools.includes(toolName)) return 0
-  }
-
-  let next = pruneToolContent(message.content, policy)
-  if (policy.mode === 'model') {
-    next = await rebuildWithModel(ctx, message.content, policy, signal, 'tools', session.requestContext?.() ?? {})
-  }
-  if (next === null) return 0
-
-  session.append(
-    'tool/result',
-    {
-      turn: event.data.turn,
-      step: event.data.step,
-      message: { ...message, content: next },
-      ...(event.data.error === undefined ? {} : { error: event.data.error }),
-      ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
-    },
-    { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] },
-  )
-  const before = measureBlocks(message.content)
-  const after = measureBlocks(next)
-  ctx.logger?.debug?.(describeChange('tools', before, after))
-  return Math.max(0, before - after)
-}
-
-/**
- * Rebuild one content array with a model-written summary in place of the elided middle.
- * Falls back to the mechanical rewrite whenever the model path is unavailable,
- * so an unconfigured or failing route never loses the saving entirely.
- * @param {any} ctx - plugin context.
- * @param {readonly any[]} blocks - original content blocks.
- * @param {any} policy - section config carrying `headChars`, `tailChars` and `model`.
- * @param {AbortSignal | undefined} signal - step cancellation.
- * @param {'reasoning' | 'tools'} kind - which section asked.
- * @returns {Promise<any[] | null>} replacement blocks, or `null` when within budget.
- */
-async function rebuildWithModel(ctx, blocks, policy, signal, kind, routed) {
-  const kindOfBlock = kind === 'tools' ? 'text' : 'reasoning'
-  const text = blocks.filter((block) => block?.type === kindOfBlock)
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .join('')
-  const limit = kind === 'tools' ? policy.thresholdChars : policy.minChars
-  if ([...text].length <= limit) return null
-
-  // Already summarized once: never summarize a summary (it would compound).
-  const marker = kind === 'tools' ? TOOL_MARKER : REASONING_MARKER
-  if (text.includes(marker.trim())) return null
-
-  const mechanical = () => (kind === 'tools' ? pruneToolContent(blocks, policy) : trimReasoning(blocks, policy))
-  const model = policy.model ?? {}
-  const summaryCfg = {
-    ...model,
-    provider: model.provider || (routed && routed.provider) || '',
-    model: model.model || (routed && routed.model) || '',
-  }
-
-  try {
-    const replaced = await summarizeMiddle(
-      ctx,
-      summaryCfg,
-      text,
-      { headChars: policy.headChars, tailChars: policy.tailChars, marker },
-      signal,
-    )
-    if (replaced === null) throw new Error('empty-summary')
-    const rich = blocks.filter((block) => block?.type !== kindOfBlock)
-    return [{ type: kindOfBlock, text: replaced }, ...rich]
-  } catch (error) {
-    ctx.logger?.warn?.(`[compact-arsenal] model ${kind} unavailable, using mechanical: ${error?.message ?? error}`)
-    return mechanical()
-  }
-}
-
-/**
- * Name of the tool that produced one result, from the matching tool call.
- * @param {any} session - live session.
- * @param {any} event - tool/result event.
- * @returns {string | undefined} tool name when the call is still in the surface.
- */
-function resolveToolName(session, event) {
-  const callId = event.data?.message?.toolCallId ?? event.data?.message?.source?.callId
-  if (callId === undefined) return undefined
-  for (const seq of session.surface.nodes) {
-    const candidate = session.eventAt(seq)
-    if (candidate?.type === 'tool/call' && candidate.data?.callId === callId) return candidate.data.name
-  }
-  return undefined
-}
-
-/**
- * Rough size of a content array for logging.
- * @param {readonly any[]} blocks - content blocks.
- * @returns {number} total characters across text-like blocks.
- */
-function measureBlocks(blocks) {
-  let total = 0
-  for (const block of blocks) {
-    if (typeof block?.text === 'string') total += block.text.length
-    if (typeof block?.arguments === 'string') total += block.arguments.length
-  }
-  return total
 }

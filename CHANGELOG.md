@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-11-11
+
+### Fixed
+
+- **Surface replacements could land outside an open turn and make the session
+  unloadable.** The `agent/pre-step` handler called `rewrite()` without
+  `await`, so a slow model batch kept appending after the handler returned and
+  after its turn had closed. Of 100 affected rows in one session, 5 sat in the
+  gap between turns and were rejected by the log loader on resume; the other 95
+  slipped through while claiming a turn they did not belong to.
+- **Replacements carried the replaced node's turn.** `applyRewrittenText()` wrote
+  `turn: event.data.turn`, i.e. the turn the old node was created in — often
+  dozens of turns earlier. The row now carries the turn that owns the write, and
+  keeps the node's step only when both turns match.
+- **A cancelled step still wrote to the log.** `compressSection()` now checks
+  `signal.throwIfAborted()` before each batch and each append.
+- **Two turns of one session could rewrite concurrently.** `lastProcessedTurn`
+  is marked when a rewrite starts but appends land seconds later; a per-session
+  in-flight set now keeps a second pass from starting.
+- **A turn closing mid-pass is detected.** Every append is preceded by a
+  turn-boundary check read from the log tail, so a write that would land after
+  `turn/end` is skipped instead of corrupting the log.
+
+### Removed
+
+- The unused single-item rewrite path (`rewriteAssistant*`, `rewriteToolResult*`,
+  `rebuildWithModel`) — dead code that carried the same stale-turn bug and could
+  have been reintroduced by accident.
+
+### Added
+
+- `test/turn-position.test.mjs`: pins the turn/step semantics of a replacement
+  and the "is the turn still open" decision.
+- `test/verify-fix.cjs`: asserts all of the above against the shipped source, so
+  a regression fails a test rather than a user's session.
+
 ## [0.2.1] — 2026-11-10
 
 ### Fixed
