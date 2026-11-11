@@ -31,7 +31,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.5.1'
+export const PACKAGE_VERSION = '0.6.0'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -52,6 +52,8 @@ export const DEFAULTS = Object.freeze({
   enabled: true,
   /** Empty means "$DSH_HOME/compact-arsenal" resolved at runtime, never a fixed path. */
   archiveDir: '',
+  /** Whether rewrite records are written at all; off means nothing touches disk. */
+  archiveEnabled: true,
   total: {
     enabled: false,
     pressureRatio: 0.8,
@@ -137,6 +139,7 @@ export function normalizeConfig(raw) {
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     archiveDir: typeof input.archiveDir === 'string' ? input.archiveDir : DEFAULTS.archiveDir,
+    archiveEnabled: input.archiveEnabled === undefined ? DEFAULTS.archiveEnabled : input.archiveEnabled === true,
     total,
     reasoning: { ...reasoning, model: reasoningModel },
     tools: {
@@ -475,9 +478,10 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
     stats.total = (stats.total ?? 0) + 1
     stats.chars += used
     ctx.logger?.debug?.(`[compact-arsenal] total: replaced ${picked.length} nodes (-${used} chars)`)
-    const archivedPath = await archiveRewrite({
+    const archivedPath = total.archiveEnabled === false ? undefined : await archiveRewrite({
       root: archive.root,
       sessionId: session.id,
+      sessionTitle: sessionTitleOf(session),
       kind: 'total',
       method: 'model',
       seq: startSeq,
@@ -492,6 +496,33 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
   } catch (error) {
     ctx.logger?.warn?.(`[compact-arsenal] total replacement rejected: ${error?.message ?? error}`)
   }
+}
+
+/**
+ * The conversation title the Host shows for a session, when it exposes one.
+ *
+ * The title is what a user recognizes in a file listing; the session id stays
+ * in the record body for exact matching. Absent titles simply fall back to id.
+ *
+ * @param {any} session - live session.
+ * @returns {string | undefined} the title, or undefined when unknown.
+ */
+function sessionTitleOf(session) {
+  try {
+    const snapshot = ctx_sessionTitle(session)
+    if (typeof snapshot === 'string' && snapshot.trim() !== '') return snapshot.trim()
+  } catch {
+    // A missing title projection only means "use the id".
+  }
+  return undefined
+}
+
+/** Session titles live on the session projection, if the Host registered it. */
+function ctx_sessionTitle(session) {
+  const title = session?.title
+  if (typeof title === 'string') return title
+  if (typeof session?.summary?.title === 'string') return session.summary.title
+  return undefined
 }
 
 /**
@@ -579,8 +610,12 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
     return open === undefined || open === payload.turn
   }
 
+  // The archive switch is global; mirror it into each section policy so the
+  // per-record decision stays a single field read.
+  const withArchive = (section) => ({ ...section, archiveEnabled: config.archiveEnabled })
+
   if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.reasoning, 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive, payload.turn, stillOpen)
+    const saved = await compressSection(ctx, session, withArchive(config.reasoning), 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive, payload.turn, stillOpen)
     stats.reasoning += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
@@ -588,7 +623,7 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   }
 
   if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
-    const saved = await compressSection(ctx, session, config.tools, 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive, payload.turn, stillOpen)
+    const saved = await compressSection(ctx, session, withArchive(config.tools), 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive, payload.turn, stillOpen)
     stats.tools += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
@@ -811,9 +846,10 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
       }
       items += 1
       chars += Math.max(0, item.text.length - replacement.length)
-      const archivedPath = await archiveRewrite({
+      const archivedPath = policy.archiveEnabled === false ? undefined : await archiveRewrite({
         root: archive.root,
         sessionId: session.id,
+        sessionTitle: sessionTitleOf(session),
         kind,
         method: policy.mode === 'model' ? 'model' : 'mechanical',
         seq: item.seq,

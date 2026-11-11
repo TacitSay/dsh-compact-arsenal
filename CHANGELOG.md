@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-11-11
+
+### Added
+
+- **压缩留存 switch.** Archiving can be turned off without touching the
+  compression itself, so a machine that only needs the token savings stops
+  writing files. Off means nothing touches disk.
+- **File names built for comparison.** A record is now named
+  `<对话名>--<内容>--<方式>--<时间>--seq<编号>.md`, e.g.
+  `WordCut-词剪--tools--model--20261111-214530--seq1234.md`. The conversation
+  comes first so one session sorts together; the timestamp sorts chronologically
+  in a plain directory listing; the node id makes a record traceable back to the
+  log. The record body now also states the conversation title, the local time,
+  and the saved ratio.
+
+### Changed
+
+- Archiving reads the conversation title from the session when the Host exposes
+  one, falling back to the session id.
+
+## [0.5.1] — 2026-11-11
+
+Patch release: `0.5.0` was stranded in npm's staging queue (a publish returned
+`409 Cannot publish over previously staged version` while the staging list
+showed nothing), so the same code shipped under a fresh number.
+
 ## [0.5.0] — 2026-11-11
 
 ### Fixed

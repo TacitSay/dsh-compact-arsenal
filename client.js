@@ -229,6 +229,7 @@ window.__ModuleLoader__.load({
 
     const emptyConfig = {
       enabled: true,
+      archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
       total: { enabled: false, pressureRatio: 0.8, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
@@ -499,7 +500,9 @@ window.__ModuleLoader__.load({
           : null,
         archiveRoot
           ? h('p', { key: 'archive', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6, wordBreak: 'break-all' } },
-            `归档目录：${archiveRoot}${lastArchivePath ? `（最新：${lastArchivePath}）` : ''}（共 ${stats.archived ?? 0} 份）`)
+            config.archiveEnabled === false
+              ? `压缩留存已关闭，不再写入磁盘（目录：${archiveRoot}）`
+              : `归档目录：${archiveRoot}（共 ${stats.archived ?? 0} 份）${lastArchivePath ? `\n最新：${lastArchivePath.split(/[\\/]/).at(-1)}` : ''}`)
           : null,
       ])
 
@@ -576,12 +579,46 @@ window.__ModuleLoader__.load({
         style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 },
       }, '安全边界：不动系统提示词、工具说明、你的消息和工具调用参数；原始内容仍完整保留在会话日志里。')
 
+      /**
+       * Compression retention: whether each rewrite is written to disk.
+       *
+       * Kept out of the three sections on purpose — it is a diagnostics switch,
+       * not a compression method, and turning it off must not change what the
+       * model sees.
+       */
+      const archiveCard = h('section', {
+        key: 'retention',
+        style: {
+          border: `1px solid ${LINE}`, borderRadius: 12, background: CARD,
+          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10,
+        },
+      }, [
+        h('header', {
+          key: 'h',
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+        }, [
+          h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
+            h('strong', { key: 'a', style: { fontSize: 14 } }, '压缩留存'),
+            h('span', { key: 'b', style: { fontSize: 11, color: MUTED } },
+              '把每次改写的原文与结果写入文件，便于对比压缩程度、排查问题'),
+          ]),
+          h(Switch, {
+            key: 'sw',
+            checked: config.archiveEnabled !== false,
+            label: '压缩留存',
+            onChange: (value) => patch((cfg) => ({ ...cfg, archiveEnabled: value })),
+          }),
+        ]),
+        h('p', { key: 'n', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 } },
+          '文件名格式：对话名--内容--方式--时间--seq编号.md，例如 WordCut-词剪--tools--model--20261111-214530--seq1234.md'),
+      ])
+
       return h('div', {
         style: {
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, sections, statsLine, safety])
+      }, [header, sections, archiveCard, statsLine, safety])
     }
 
     return {
