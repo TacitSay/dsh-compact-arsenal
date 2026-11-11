@@ -31,7 +31,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.4.0'
+export const PACKAGE_VERSION = '0.5.0'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -430,6 +430,19 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
   if (picked.length < 4) return
 
   const transcript = picked.map((node) => transcriptLine(node.event)).join('\n')
+
+  // The replacement must cite EVERY surface node inside the replaced span, not
+  // just the ones we fed the model: filters above skip system/developer nodes
+  // and nodes without a turn, and those still sit inside [startSeq, endSeq].
+  const startSeq = picked[0].seq
+  const endSeq = picked[picked.length - 1].seq
+  const surface = [...session.surface.nodes]
+  const startIdx = surface.indexOf(startSeq)
+  const endIdx = surface.indexOf(endSeq)
+  if (startIdx < 0 || endIdx < startIdx) return
+  if (startIdx === 0 && session.eventAt(surface[0])?.type === 'system/message') return
+  const shadowed = surface.slice(startIdx, endIdx + 1)
+
   const routed = session.requestContext?.() ?? {}
   const summaryCfg = {
     ...total,
@@ -446,8 +459,6 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
   }
   if (summary === '') return
 
-  const startSeq = picked[0].seq
-  const endSeq = picked[picked.length - 1].seq
   try {
     session.append(
       'user/message',
@@ -459,7 +470,7 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
           text: `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.\n\n<compacted-summary>\n${summary}\n</compacted-summary>`,
         }],
       },
-      { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs: picked.map((node) => node.seq) },
+      { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs: shadowed },
     )
     stats.total = (stats.total ?? 0) + 1
     stats.chars += used
@@ -640,7 +651,16 @@ function currentPosition(session, event, currentTurn) {
 }
 
 /**
- * Replace one event's text with a rewritten version, keeping message identity.
+ * Rewrite one node's text, using the only shape the log accepts for each type.
+ *
+ * `tool/result` may be replaced in place because it can cite the node it
+ * shadows. `assistant/message` cannot: the log rejects any `sourceEventSeqs` on
+ * it ("assistant/message embeds its source stream"), while every replacement
+ * must cite all shadowed nodes — so an in-place assistant rewrite is impossible
+ * on every published version. Reasoning therefore collapses into a
+ * `user/message` checkpoint covering the whole replaced span, which is the same
+ * shape the shipped compaction backends use.
+ *
  * @param {any} session - live session.
  * @param {any} event - the surface event being replaced.
  * @param {number} seq - its surface seq.
@@ -650,26 +670,46 @@ function currentPosition(session, event, currentTurn) {
  * @returns {void}
  */
 function applyRewrittenText(session, event, seq, kind, text, currentTurn) {
-  const blocks = event.data?.message?.content
-  const wanted = kind === 'tools' ? 'text' : 'reasoning'
-  const rich = blocks.filter((block) => block?.type !== wanted)
-  const message = { ...event.data.message, content: [{ type: wanted, text }, ...rich] }
-  const position = currentPosition(session, event, currentTurn)
   if (kind === 'tools') {
+    const blocks = event.data?.message?.content ?? []
+    const rich = blocks.filter((block) => block?.type !== 'text')
+    const message = { ...event.data.message, content: [{ type: 'text', text }, ...rich] }
     session.append('tool/result', {
-      ...position,
+      ...currentPosition(session, event, currentTurn),
       message,
       ...(event.data.error === undefined ? {} : { error: event.data.error }),
       ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
     }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
     return
   }
-  session.append('assistant/message', {
-    ...position,
-    message,
-    ...(event.data.usage === undefined ? {} : { usage: event.data.usage }),
-    stream: event.data.stream ?? [],
-  }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq } })
+
+  // Reasoning: replace the node with a user-role checkpoint that cites it.
+  session.append('user/message', {
+    role: 'user',
+    source: { kind: 'user' },
+    content: [{ type: 'text', text }],
+  }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
+}
+
+/**
+ * Whether one section can legally replace a node in this session right now.
+ *
+ * The check is deliberately cheap and local: it mirrors the log's own rules
+ * (a replacement must cite the node it shadows, and `assistant/message` may not
+ * cite anything) so an impossible write is detected before a model call.
+ *
+ * @param {any} session - live session.
+ * @param {'reasoning' | 'tools'} kind - section kind.
+ * @param {number | undefined} seq - the node that would be replaced.
+ * @returns {boolean} true when the replacement shape is allowed.
+ */
+function canReplace(session, kind, seq) {
+  if (seq === undefined) return false
+  const surface = session.surface?.nodes
+  if (!Array.isArray(surface) || !surface.includes(seq)) return false
+  if (kind === 'tools') return session.eventAt?.(seq)?.type === 'tool/result'
+  // Reasoning collapses into a user/message checkpoint, which may cite the node.
+  return kind === 'reasoning'
 }
 
 /**
@@ -711,6 +751,14 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
     totalChars += text.length
   }
   if (totalChars < minTotal) return { items: 0, chars: 0, failed: 0, archived: 0 }
+
+  // A rejection here is deterministic: the log will refuse the same shape every
+  // time. Probing with one throwaway append keeps a doomed batch from spending a
+  // model call, so `mode: model` cannot burn requests on writes that cannot land.
+  if (!canReplace(session, kind, candidates[0].seq)) {
+    lastFailure = `${kind}: surface shape rejected before any model call`
+    return { items: 0, chars: 0, failed: 1, archived: 0 }
+  }
 
   const routed = session.requestContext?.() ?? {}
   const model = policy.model ?? {}

@@ -78,7 +78,29 @@ check(
   'GET /state returns version',
 )
 
-// 8. Dead single-item rewriters are gone.
+// 8. Reasoning replacements use the user/message checkpoint shape.
+check(
+  'reasoning replaces via user/message',
+  /session\.append\('user\/message', \{\s*role: 'user'/.test(src) && !/session\.append\('assistant\/message'/.test(src),
+  'assistant/message in-place rewrite is not used for reasoning',
+)
+check(
+  'reasoning cite the shadowed node',
+  /surfaceOp: \{ op: 'replace', startSeq: seq, endSeq: seq \}, sourceEventSeqs: \[seq\] \}\)\n\}/.test(src),
+  'user/message checkpoint carries sourceEventSeqs',
+)
+check(
+  'totalPass cites the whole span',
+  /sourceEventSeqs: shadowed/.test(src),
+  'every surface node in [startSeq, endSeq] is cited',
+)
+check(
+  'impossible writes are rejected before the model call',
+  /canReplace\(session, kind, candidates\[0\]\.seq\)/.test(src),
+  'pre-flight shape check present',
+)
+
+// 9. Dead single-item rewriters are gone.
 check(
   'dead rewriters removed',
   !/function rewriteAssistantAsync|function rewriteToolResultAsync|async function rebuildWithModel/.test(src),

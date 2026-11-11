@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-11-11
+
+### Fixed
+
+- **Reasoning compression could never land on any published DSH release.**
+  Reported in [#1](https://github.com/TacitSay/dsh-compact-arsenal/issues/1):
+  the log enforces two mutually exclusive rules on a surface replacement — every
+  shadowed node must be cited, and `assistant/message` may not cite anything.
+  Rewriting an assistant node in place is therefore impossible, and every
+  reasoning attempt failed with `missing <seq>` while its model call had already
+  been paid for. Reasoning now collapses into a `user/message` checkpoint citing
+  the node it replaces, the same shape the shipped compaction backends use.
+- **`totalPass` cited only the nodes it fed the model.** Nodes filtered out
+  before summarization (system, developer, and turn-less nodes, including this
+  plugin's own earlier checkpoints) still fall inside `[startSeq, endSeq]` and
+  were reported as missing. The whole surface span is cited now.
+
+### Added
+
+- Pre-flight shape check: an impossible replacement is detected before the model
+  call, so a deterministic rejection no longer spends a request.
+- `test/surface-shape.test.mjs` runs against the packaged `dsh-session` and pins
+  the accepted replacement shape for both node types.
+- Source assertions now cover the reasoning shape, the whole-span citation, and
+  the pre-flight check (17 checks).
+
 ## [0.4.0] — 2026-11-11
 
 ### Fixed
