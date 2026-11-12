@@ -33,7 +33,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.7.0'
+export const PACKAGE_VERSION = '0.7.1'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -502,14 +502,12 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
   try {
     session.append(
       'user/message',
-      {
-        role: 'user',
-        source: { kind: 'user' },
-        content: [{
-          type: 'text',
-          text: `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.\n\n<compacted-summary>\n${summary}\n</compacted-summary>`,
-        }],
-      },
+      buildUserCheckpoint(
+        `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.\n\n<compacted-summary>\n${summary}\n</compacted-summary>`,
+        'total',
+        startSeq,
+        turn,
+      ),
       { surfaceOp: { op: 'replace', startSeq, endSeq }, sourceEventSeqs: shadowed },
     )
     stats.total = (stats.total ?? 0) + 1
@@ -756,11 +754,64 @@ function applyRewrittenText(session, event, seq, kind, text, currentTurn) {
   }
 
   // Reasoning: replace the node with a user-role checkpoint that cites it.
-  session.append('user/message', {
+  const checkpoint = buildUserCheckpoint(text, kind, seq, currentTurn)
+  session.append('user/message', checkpoint, {
+    surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },
+    sourceEventSeqs: [seq],
+  })
+}
+
+/**
+ * Build the `user/message` payload that stands in for a compressed node.
+ *
+ * For `user/message` the event `data` IS the message, so it must satisfy the
+ * log's full message shape: a non-empty `id`, `role: 'user'`, a `source` with a
+ * non-empty `kind`, and array `content`. The id is what a strict reload checks
+ * first — a checkpoint without one makes the whole session unloadable
+ * (`lacks an identified message`).
+ *
+ * @param {string} text - replacement text.
+ * @param {'reasoning' | 'tools'} kind - section kind, recorded in the id.
+ * @param {number} seq - the node being replaced, recorded in the id.
+ * @param {number | undefined} currentTurn - turn that owns this write.
+ * @returns {{ id: string, role: 'user', source: { kind: string }, content: any[], turn?: number, step?: number }} the message.
+ */
+function buildUserCheckpoint(text, kind, seq, currentTurn) {
+  const checkpoint = {
+    // Traceable rather than random: the id itself says which node it replaced.
+    id: `compact-arsenal-${kind}-${seq}-${Date.now()}`,
     role: 'user',
     source: { kind: 'user' },
     content: [{ type: 'text', text }],
-  }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
+  }
+  if (Number.isFinite(currentTurn)) {
+    checkpoint.turn = currentTurn
+    checkpoint.step = 1
+  }
+  assertUserCheckpointShape(checkpoint)
+  return checkpoint
+}
+
+/**
+ * Fail fast when a checkpoint would be rejected by the log.
+ *
+ * Mirrors `assertMessageEventShape` for `user/message` in `dsh-session`: the
+ * four checks that a strict reload performs. Catching a malformed checkpoint
+ * here keeps it out of the log entirely instead of corrupting the session.
+ *
+ * @param {any} message - the candidate message.
+ * @returns {void}
+ * @throws {Error} when a required field is missing or malformed.
+ */
+function assertUserCheckpointShape(message) {
+  if (typeof message?.id !== 'string' || message.id === '') {
+    throw new Error('user checkpoint needs a non-empty id')
+  }
+  if (message.role !== 'user') throw new Error('user checkpoint needs role "user"')
+  if (typeof message.source?.kind !== 'string' || message.source.kind === '') {
+    throw new Error('user checkpoint needs a source kind')
+  }
+  if (!Array.isArray(message.content)) throw new Error('user checkpoint needs array content')
 }
 
 /**

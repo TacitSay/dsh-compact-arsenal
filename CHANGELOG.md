@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-11-12
+
+### Fixed
+
+- **A checkpoint without an `id` made the session unloadable.** Reported as
+  incident #2: `user/message` events carry the message *as* their payload, so a
+  strict reload demands a non-empty `id`, `role: 'user'`, a `source.kind` and
+  array `content`. The reasoning branch hand-built that payload and omitted the
+  `id`, so 16 checkpoints caused
+  `seed user/message at index 6292 lacks an identified message` and the session
+  would not open. `totalPass` had the same omission in its own checkpoint.
+- Both call sites now build their payload through one `buildUserCheckpoint()`
+  that supplies a traceable id (`compact-arsenal-<kind>-<seq>-<time>`), the
+  current turn, and validates the result against the log's own four rules before
+  the append — a malformed checkpoint is refused rather than stored.
+
+### Added
+
+- `test/checkpoint-shape.test.mjs`: an integration test against the packaged
+  `dsh-session` that writes a checkpoint into a real log and re-checks it. It
+  also records the mechanism behind the incident: a live `append` **accepts** an
+  id-less checkpoint, so the defect only surfaces on reload — which is why the
+  plugin's own guard, not the log, has to catch it.
+- Source assertions now cover the single construction path, the id, the
+  pre-append shape validation, and the absence of any hand-rolled
+  `user/message` append (22 checks).
+
 ## [0.7.0] — 2026-11-12
 
 ### Changed

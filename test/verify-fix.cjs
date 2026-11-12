@@ -81,12 +81,12 @@ check(
 // 8. Reasoning replacements use the user/message checkpoint shape.
 check(
   'reasoning replaces via user/message',
-  /session\.append\('user\/message', \{\s*role: 'user'/.test(src) && !/session\.append\('assistant\/message'/.test(src),
+  /session\.append\('user\/message', checkpoint, \{/.test(src) && !/session\.append\('assistant\/message'/.test(src),
   'assistant/message in-place rewrite is not used for reasoning',
 )
 check(
   'reasoning cite the shadowed node',
-  /surfaceOp: \{ op: 'replace', startSeq: seq, endSeq: seq \}, sourceEventSeqs: \[seq\] \}\)\n\}/.test(src),
+  /surfaceOp: \{ op: 'replace', startSeq: seq, endSeq: seq \},\s*sourceEventSeqs: \[seq\],/.test(src),
   'user/message checkpoint carries sourceEventSeqs',
 )
 check(
@@ -100,7 +100,34 @@ check(
   'pre-flight shape check present',
 )
 
-// 9. Dead single-item rewriters are gone.
+// 9. Every user/message checkpoint is built with an id (incident #2).
+check(
+  'user checkpoints are built by one function',
+  /function buildUserCheckpoint\(/.test(src),
+  'single construction path',
+)
+check(
+  'the checkpoint carries an id',
+  /id: `compact-arsenal-\$\{kind\}-\$\{seq\}-\$\{Date\.now\(\)\}`/.test(src),
+  'traceable non-empty id',
+)
+check(
+  'no hand-rolled user/message append remains',
+  !/session\.append\(\s*'user\/message',\s*\{\s*role: 'user',/.test(src),
+  'totalPass and reasoning both use buildUserCheckpoint',
+)
+check(
+  'shape is validated before the append',
+  /assertUserCheckpointShape\(checkpoint\)/.test(src),
+  'malformed checkpoints never reach the log',
+)
+check(
+  'the shape check mirrors the log',
+  /needs a non-empty id/.test(src) && /needs role "user"/.test(src) && /needs a source kind/.test(src) && /needs array content/.test(src),
+  'id / role / source.kind / content',
+)
+
+// 10. Dead single-item rewriters are gone.
 check(
   'dead rewriters removed',
   !/function rewriteAssistantAsync|function rewriteToolResultAsync|async function rebuildWithModel/.test(src),
