@@ -22,6 +22,8 @@ import {
   TOOL_MARKER,
   alreadyRewritten,
 } from './lib/policy.js'
+import { mkdir } from 'node:fs/promises'
+
 import { summarize, summarizeBatch } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
 
@@ -31,7 +33,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.6.0'
+export const PACKAGE_VERSION = '0.7.0'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -283,6 +285,41 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
   }
 
   const route = (path, handler) => ctx.effect(() => webServer.register({ kind: 'exact', path, handler }))
+
+  /**
+   * Open the archive directory in the desktop file manager.
+   *
+   * The path is resolved server-side from the plugin's own location, so the
+   * browser never supplies or learns a host path it could misuse.
+   */
+  route(`${API_PREFIX}/open-archive`, async (req, res) => {
+    if (req.method !== 'POST') return send(res, 405, { error: 'method-not-allowed' })
+    const subprocess = ctx.get('subprocess')
+    if (subprocess === undefined) return send(res, 503, { error: 'subprocess-unavailable' })
+    const target = archive.root
+    try {
+      await mkdir(target, { recursive: true })
+    } catch {
+      return send(res, 500, { error: 'archive-dir-unavailable', path: target })
+    }
+    try {
+      const argv = process.platform === 'win32'
+        ? ['explorer.exe', target]
+        : process.platform === 'darwin'
+          ? ['open', target]
+          : ['xdg-open', target]
+      // Detached explorer: it exits on its own, and its exit code is meaningless.
+      subprocess.spawn({
+        argv,
+        cwd: target,
+        stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
+        graceMs: 2000,
+      })
+      send(res, 200, { opened: true })
+    } catch (error) {
+      send(res, 500, { error: 'spawn-failed', message: String(error?.message ?? error) })
+    }
+  })
 
   route(`${API_PREFIX}/state`, (req, res) => {
     if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })

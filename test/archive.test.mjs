@@ -1,26 +1,36 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { archiveRoot, archiveRewrite } from '../lib/archive.js'
+import { archiveFallbackRoot, archiveRoot, archiveRewrite } from '../lib/archive.js'
 
-test('archiveRoot follows DSH_HOME when set', () => {
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+
+test('archiveRoot lives inside the plugin directory, whatever the machine', () => {
+  const root = archiveRoot('')
+  assert.equal(root, join(PLUGIN_ROOT, 'archive'))
+  // No host path is baked in: the root is derived from this module's own URL.
+  assert.ok(!root.includes('.dsh'), root)
+})
+
+test('archiveRoot ignores DSH_HOME, so the archive travels with the plugin', () => {
   const previous = process.env.DSH_HOME
   process.env.DSH_HOME = '/tmp/dsh-home-test'
   try {
-    assert.equal(archiveRoot(''), join('/tmp/dsh-home-test', 'compact-arsenal'))
+    assert.equal(archiveRoot(''), join(PLUGIN_ROOT, 'archive'))
   } finally {
     if (previous === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previous
   }
 })
 
-test('archiveRoot falls back to the user home, never a fixed absolute path', () => {
+test('the fallback root stays under the Harness home', () => {
   const previous = process.env.DSH_HOME
   delete process.env.DSH_HOME
   try {
-    const root = archiveRoot('')
+    const root = archiveFallbackRoot()
     assert.ok(root.startsWith(homedir()), `expected a path under ${homedir()}, got ${root}`)
     assert.ok(root.endsWith('compact-arsenal'))
   } finally {

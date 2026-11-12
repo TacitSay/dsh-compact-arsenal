@@ -269,6 +269,7 @@ window.__ModuleLoader__.load({
       const [totalApplied, setTotalApplied] = useState(null)
       const [lastFailure, setLastFailure] = useState(null)
       const [archiveRoot, setArchiveRoot] = useState(null)
+      const [openState, setOpenState] = useState('idle')
       const [lastArchivePath, setLastArchivePath] = useState(null)
       const [pressure, setPressure] = useState(null)
       const [runtimeVersion, setRuntimeVersion] = useState(null)
@@ -330,6 +331,18 @@ window.__ModuleLoader__.load({
               setMessage(String((error && error.message) || error))
             })
         }, 500)
+      }, [])
+
+      /** Ask the Host to reveal the archive directory in the file manager. */
+      const openArchive = useCallback(() => {
+        setOpenState('opening')
+        fetch(`${API}/open-archive`, { method: 'POST', credentials: 'same-origin' })
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+          .then(() => setOpenState('idle'))
+          .catch(() => {
+            setOpenState('failed')
+            setTimeout(() => setOpenState('idle'), 3000)
+          })
       }, [])
 
       const patch = useCallback((updater) => {
@@ -492,18 +505,6 @@ window.__ModuleLoader__.load({
           ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },
             `失败 ${stats.failed} 次（未落盘，不计入节省）：${lastFailure || '原因未记录'}`)
           : null,
-        pressure && typeof pressure.estimated === 'number' && pressure.estimated > 0
-          ? h('p', { key: 'pressure', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
-            pressure.window
-              ? `上下文压力：真实 ${(pressure.reported ?? pressure.estimated).toLocaleString()}（${((pressure.reported ?? pressure.estimated) / pressure.window * 100).toFixed(1)}%）· 估算 ${pressure.estimated.toLocaleString()}（${(pressure.estimated / pressure.window * 100).toFixed(1)}%）· 窗口 ${pressure.window.toLocaleString()}`
-              : `上下文压力：真实 ${(pressure.reported ?? pressure.estimated).toLocaleString()} · 估算 ${pressure.estimated.toLocaleString()}`)
-          : null,
-        archiveRoot
-          ? h('p', { key: 'archive', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6, wordBreak: 'break-all' } },
-            config.archiveEnabled === false
-              ? `压缩留存已关闭，不再写入磁盘（目录：${archiveRoot}）`
-              : `归档目录：${archiveRoot}（共 ${stats.archived ?? 0} 份）${lastArchivePath ? `\n最新：${lastArchivePath.split(/[\\/]/).at(-1)}` : ''}`)
-          : null,
       ])
 
       const statusText = status === 'loading' ? '正在读取配置…'
@@ -555,8 +556,6 @@ window.__ModuleLoader__.load({
               h('h1', { key: 'h1', style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '上下文压缩'),
               versionBadge,
             ]),
-            h('p', { key: 'p', style: { margin: 0, fontSize: 12, color: MUTED, lineHeight: 1.6 } },
-              '开关即生效，参数改完自动保存。每个板块有自己的触发阈值。'),
           ]),
           h('div', { key: 'master', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
             h('span', { key: 'l', style: { fontSize: 12, color: MUTED } }, '总开关'),
@@ -573,11 +572,6 @@ window.__ModuleLoader__.load({
           style: { fontSize: 11, color: status === 'error' ? WARN : MUTED },
         }, statusText),
       ])
-
-      const safety = h('p', {
-        key: 'safety',
-        style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 },
-      }, '安全边界：不动系统提示词、工具说明、你的消息和工具调用参数；原始内容仍完整保留在会话日志里。')
 
       /**
        * Compression retention: whether each rewrite is written to disk.
@@ -611,6 +605,35 @@ window.__ModuleLoader__.load({
         ]),
         h('p', { key: 'n', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 } },
           '文件名格式：对话名--内容--方式--时间--seq编号.md，例如 WordCut-词剪--tools--model--20261111-214530--seq1234.md'),
+        h('div', {
+          key: 'loc',
+          style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+        }, [
+          h('span', {
+            key: 'path',
+            style: { fontSize: 11, color: MUTED, wordBreak: 'break-all', flex: '1 1 240px' },
+          }, config.archiveEnabled === false
+            ? '压缩留存已关闭，不再写入磁盘'
+            : `归档目录：${archiveRoot || '(解析中…)'}（共 ${stats.archived ?? 0} 份）`),
+          h('button', {
+            key: 'open',
+            type: 'button',
+            disabled: config.archiveEnabled === false || openState === 'opening',
+            title: '在文件管理器中打开归档目录',
+            onClick: () => openArchive(),
+            style: {
+              fontSize: 11, padding: '2px 10px', borderRadius: 999, whiteSpace: 'nowrap',
+              border: `1px solid ${LINE}`, background: 'transparent',
+              color: config.archiveEnabled === false ? MUTED : 'inherit',
+              cursor: config.archiveEnabled === false ? 'not-allowed' : 'pointer',
+              opacity: config.archiveEnabled === false ? 0.5 : 1,
+            },
+          }, openState === 'opening' ? '打开中…' : openState === 'failed' ? '打开失败' : '打开目录'),
+        ]),
+        lastArchivePath
+          ? h('p', { key: 'latest', style: { margin: 0, fontSize: 11, color: MUTED, wordBreak: 'break-all' } },
+            `最新：${lastArchivePath.split(/[\\/]/).at(-1)}`)
+          : null,
       ])
 
       return h('div', {
@@ -618,7 +641,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, sections, archiveCard, statsLine, safety])
+      }, [header, sections, archiveCard, statsLine])
     }
 
     return {

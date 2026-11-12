@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-11-12
+
+### Changed
+
+- **The archive lives inside the plugin directory** (`<plugin>/archive`), resolved
+  from the module's own URL instead of `DSH_HOME`. The archive therefore travels
+  with the plugin, no host path is baked in, and a read-only install falls back
+  to `$DSH_HOME/compact-arsenal` without losing the record.
+- The archive location and its record count moved into the **压缩留存** card,
+  next to the switch that controls them, instead of sitting at the page bottom.
+
+### Added
+
+- **打开目录** button in the 压缩留存 card: asks the Host to reveal the archive
+  folder in the platform file manager. The path is resolved server-side, so the
+  browser never supplies or learns a host path.
+
+### Removed
+
+- Three lines of standing copy from the panel: the "parameters save
+  automatically" subtitle, the pressure readout row, and the safety-boundary
+  footer.
+
 ## [0.6.0] — 2026-11-11
 
 ### Added
