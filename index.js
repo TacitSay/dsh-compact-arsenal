@@ -33,7 +33,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.7.1'
+export const PACKAGE_VERSION = '0.8.0'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -285,6 +285,42 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
   }
 
   const route = (path, handler) => ctx.effect(() => webServer.register({ kind: 'exact', path, handler }))
+
+  /**
+   * The provider/model catalog, so the panel can offer the same picker a chat
+   * model selection uses instead of free-text fields.
+   *
+   * Read from the live `llm` registry rather than a stored copy: a route appears
+   * here exactly when the Harness could actually route a request to it.
+   */
+  route(`${API_PREFIX}/models`, async (req, res) => {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
+    const llm = ctx.get('llm')
+    if (llm === undefined) return send(res, 503, { error: 'llm-unavailable', providers: [] })
+    try {
+      const providers = llm.listProviders().map((p) => ({ id: p.id, name: p.name }))
+      const models = []
+      for (const provider of providers) {
+        let list = []
+        try {
+          list = await llm.listModels(provider.id)
+        } catch {
+          // A provider that cannot enumerate still routes; keep it selectable.
+        }
+        for (const model of list) {
+          models.push({
+            provider: provider.id,
+            providerName: provider.name,
+            id: model.id,
+            name: model.name || model.id,
+          })
+        }
+      }
+      send(res, 200, { providers, models })
+    } catch (error) {
+      send(res, 500, { error: 'list-failed', message: String(error?.message ?? error), providers: [], models: [] })
+    }
+  })
 
   /**
    * Open the archive directory in the desktop file manager.

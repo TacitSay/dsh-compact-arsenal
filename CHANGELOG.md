@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-11-13
+
+### Added
+
+- **Model pickers backed by the live catalog.** 思考压缩 / 工具输出压缩 / 总压缩
+  now choose a provider and model from dropdowns fed by
+  `llm.listProviders()` + `llm.listModels()` — the same routes a chat model
+  selection offers. Picking a model also selects its provider, so the pair can
+  never drift apart, and the empty choice keeps "follow the current session".
+  A new `GET /compact-arsenal/api/models` route serves that catalog.
+
+### Changed
+
+- **Panel layout reworked to stop fields colliding.** Every control now sits in
+  one shared `Field` frame (label / control / hint on their own lines), and all
+  inputs, selects and text areas share a single `controlStyle`. Grids use
+  `minmax(150px, 1fr)` with `box-sizing`, so a narrow window wraps instead of
+  overlapping.
+- The compression prompt and its output budget moved into their own
+  `PromptFields` block under the picker, instead of sharing a row with the
+  provider/model inputs.
+
+### Added (tests)
+
+- `test/render-panel.mjs`: renders the panel with a stub React and asserts the
+  three sections, the retention card, and that the removed copy stays removed.
+
 ## [0.7.1] — 2026-11-12
 
 ### Fixed

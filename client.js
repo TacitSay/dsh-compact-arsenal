@@ -179,22 +179,123 @@ window.__ModuleLoader__.load({
     }
 
     /** Provider / model / prompt / budget fields for one model-backed section. */
-    function ModelFields(props) {
+    /**
+     * A labelled row that keeps label, control and hint on one baseline.
+     *
+     * The earlier layout mixed peers of different intrinsic heights, which made
+     * neighbouring fields overlap; every control now shares this frame.
+     */
+    function Field(props) {
+      return h('div', {
+        style: {
+          display: 'flex', flexDirection: 'column', gap: 5,
+          minWidth: 0, boxSizing: 'border-box',
+          gridColumn: props.wide ? '1 / -1' : 'auto',
+        },
+      }, [
+        h('span', { key: 'l', style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } }, props.label),
+        props.children,
+        props.hint
+          ? h('span', { key: 'h', style: { fontSize: 10.5, color: MUTED, lineHeight: 1.4, opacity: 0.85 } }, props.hint)
+          : null,
+      ])
+    }
+
+    /** Shared look for every text input, number input and select. */
+    const controlStyle = {
+      width: '100%', minWidth: 0, boxSizing: 'border-box',
+      padding: '6px 9px', borderRadius: 8, fontSize: 12, lineHeight: 1.4,
+      border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)',
+      color: 'inherit', fontFamily: 'inherit', outline: 'none',
+    }
+
+    /**
+     * Provider + model picker backed by the live `llm` catalog.
+     *
+     * Offers exactly the routes the Harness could actually dispatch to, so a
+     * typo cannot silently produce a compression model that never answers. An
+     * empty choice keeps the documented "follow the current session" behaviour.
+     */
+    function ModelPicker(props) {
+      const model = props.model || {}
+      const set = (key, value) => props.onChange({ ...model, [key]: value })
+      const catalog = props.catalog || { providers: [], models: [] }
+      const provider = model.provider || ''
+
+      // Models are filtered by the chosen provider; with none chosen, every
+      // route is listed so a model can be picked directly.
+      const models = catalog.models.filter((m) => provider === '' || m.provider === provider)
+
+      return h(Field, {
+        wide: true,
+        label: '压缩模型',
+        hint: '留空表示跟随当前会话的模型；压缩只在触发时调用一次。',
+      }, h('div', {
+        style: {
+          display: 'grid', gap: 8,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        },
+      }, [
+        h('select', {
+          key: 'p',
+          value: provider,
+          onChange: (event) => set('provider', event.target.value),
+          style: { ...controlStyle, cursor: 'pointer' },
+        }, [
+          h('option', { key: '', value: '' }, '跟随当前会话'),
+          ...catalog.providers.map((item) => h('option', { key: item.id, value: item.id }, item.name || item.id)),
+        ]),
+        h('select', {
+          key: 'm',
+          value: model.model || '',
+          onChange: (event) => {
+            const picked = event.target.value
+            const found = catalog.models.find((m) => m.id === picked && (provider === '' || m.provider === provider))
+            // Selecting a model also selects its provider, so the pair stays valid.
+            props.onChange({
+              ...model,
+              model: picked,
+              ...(found === undefined ? {} : { provider: found.provider }),
+            })
+          },
+          style: { ...controlStyle, cursor: 'pointer' },
+        }, [
+          h('option', { key: '', value: '' }, '跟随当前会话'),
+          ...models.map((item) => h('option', {
+            key: item.provider + '/' + item.id,
+            value: item.id,
+          }, provider === '' ? `${item.providerName || item.provider} · ${item.name}` : item.name)),
+        ]),
+      ]))
+    }
+
+    /** The prompt and its output budget, kept together under the picker. */
+    function PromptFields(props) {
       const model = props.model || {}
       const set = (key, value) => props.onChange({ ...model, [key]: value })
       return h('div', {
         style: {
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: 10, padding: '10px 12px', boxSizing: 'border-box', width: '100%',
+          display: 'grid', gap: 10,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          padding: '12px', boxSizing: 'border-box', width: '100%',
           border: `1px dashed ${LINE}`, borderRadius: 10,
         },
       }, [
-        h('p', { key: 'note', style: { margin: 0, gridColumn: '1 / -1', fontSize: 11, color: MUTED } },
-          '提供方与模型留空时，自动跟随当前会话的模型。'),
-        h(TextField, { key: 'p', label: '提供方', value: model.provider || '', placeholder: '留空 = 当前会话', onChange: (v) => set('provider', v) }),
-        h(TextField, { key: 'm', label: '模型', value: model.model || '', placeholder: '留空 = 当前会话', onChange: (v) => set('model', v) }),
-        h(NumberField, { key: 't', label: '输出上限', value: model.maxTokens ?? 512, min: 64, step: 64, suffix: 'token', onChange: (v) => set('maxTokens', v) }),
-        h(TextField, { key: 'q', label: '压缩提示词', value: model.prompt || '', multiline: true, wide: true, onChange: (v) => set('prompt', v) }),
+        h(Field, { key: 't', label: '输出上限', hint: '单次摘要允许的最大 token 数' },
+          h('input', {
+            type: 'number', value: String(model.maxTokens ?? 512), min: 64, step: 64,
+            onChange: (event) => {
+              const next = Number(event.target.value)
+              set('maxTokens', Number.isFinite(next) ? next : 512)
+            },
+            style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
+          })),
+        h(Field, { key: 'q', label: '压缩提示词', wide: true, hint: '只描述内容风格；输出格式由批量层固定，无需在此声明。' },
+          h('textarea', {
+            value: model.prompt || '', rows: 3,
+            onChange: (event) => set('prompt', event.target.value),
+            style: { ...controlStyle, resize: 'vertical', lineHeight: 1.6 },
+          })),
       ])
     }
 
@@ -273,6 +374,8 @@ window.__ModuleLoader__.load({
       const [lastArchivePath, setLastArchivePath] = useState(null)
       const [pressure, setPressure] = useState(null)
       const [runtimeVersion, setRuntimeVersion] = useState(null)
+      /** Provider/model catalog from the live `llm` registry; empty until loaded. */
+      const [catalog, setCatalog] = useState({ providers: [], models: [] })
       const timer = useRef(null)
       const latest = useRef(emptyConfig)
 
@@ -297,6 +400,29 @@ window.__ModuleLoader__.load({
             if (!alive) return
             setStatus('error')
             setMessage(String((error && error.message) || error))
+          })
+        return () => { alive = false }
+      }, [])
+
+      /**
+       * Load the model catalog once, separately from the config fetch.
+       *
+       * A failure here is not fatal: the picker simply keeps only the
+       * "follow the current session" option, which is still a valid choice.
+       */
+      useEffect(() => {
+        let alive = true
+        fetch(`${API}/models`, { credentials: 'same-origin' })
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+          .then((body) => {
+            if (!alive) return
+            setCatalog({
+              providers: Array.isArray(body.providers) ? body.providers : [],
+              models: Array.isArray(body.models) ? body.models : [],
+            })
+          })
+          .catch(() => {
+            // Keep the fallback catalog; the empty choice still works.
           })
         return () => { alive = false }
       }, [])
@@ -377,10 +503,15 @@ window.__ModuleLoader__.load({
           h(NumberField, { key: 'c', label: '摘要上限', value: config.total.maxTokens, min: 256, step: 1024, suffix: 'token', onChange: (v) => setSection('total', 'maxTokens', v) }),
           h(NumberField, { key: 'd', label: '不动最近', value: config.total.retainTurns, min: 0, suffix: '轮', onChange: (v) => setSection('total', 'retainTurns', v) }),
         ]),
-        h('div', { key: 'model', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
-          h(TextField, { key: 'p', label: '摘要提供方', value: config.total.provider, placeholder: '留空 = 当前会话模型', onChange: (v) => setSection('total', 'provider', v) }),
-          h(TextField, { key: 'm', label: '摘要模型', value: config.total.model, placeholder: '留空 = 当前会话模型', onChange: (v) => setSection('total', 'model', v) }),
-        ]),
+        h(ModelPicker, {
+          key: 'mp',
+          model: { provider: config.total.provider, model: config.total.model },
+          catalog,
+          onChange: (value) => patch((cfg) => ({
+            ...cfg,
+            total: { ...cfg.total, provider: value.provider || '', model: value.model || '' },
+          })),
+        }),
         h('p', { key: 'note', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
           totalNotice),
       ])
@@ -416,8 +547,16 @@ window.__ModuleLoader__.load({
           }),
         ]),
         config.reasoning.mode === 'model'
-          ? h(ModelFields, {
-            key: 'mf',
+          ? h(ModelPicker, {
+            key: 'mp',
+            model: config.reasoning.model,
+            catalog,
+            onChange: (value) => setSection('reasoning', 'model', value),
+          })
+          : null,
+        config.reasoning.mode === 'model'
+          ? h(PromptFields, {
+            key: 'pf',
             model: config.reasoning.model,
             onChange: (value) => setSection('reasoning', 'model', value),
           })
@@ -460,8 +599,16 @@ window.__ModuleLoader__.load({
           }),
         ]),
         config.tools.mode === 'model'
-          ? h(ModelFields, {
-            key: 'mf',
+          ? h(ModelPicker, {
+            key: 'mp',
+            model: config.tools.model,
+            catalog,
+            onChange: (value) => setSection('tools', 'model', value),
+          })
+          : null,
+        config.tools.mode === 'model'
+          ? h(PromptFields, {
+            key: 'pf',
             model: config.tools.model,
             onChange: (value) => setSection('tools', 'model', value),
           })
