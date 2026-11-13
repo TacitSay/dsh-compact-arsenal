@@ -23,9 +23,11 @@ import {
   alreadyRewritten,
 } from './lib/policy.js'
 import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { summarize, summarizeBatch } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
+import { logLine, logRoot } from './lib/log.js'
 
 export const name = 'compact-arsenal'
 
@@ -279,6 +281,25 @@ export function apply(ctx, rawConfig) {
 const API_PREFIX = '/compact-arsenal/api'
 
 /**
+ * The file-manager command that reveals a directory on this platform.
+ *
+ * Windows needs the absolute path to `explorer.exe`: a bare name is resolved
+ * against the child's `PATH`, which the subprocess service scrubs. The other
+ * platforms take the launcher by bare name, which is conventional.
+ *
+ * @param {string} target - absolute directory path.
+ * @returns {{ argv: string[] }} the command to spawn.
+ */
+function explorerCommand(target) {
+  if (process.platform === 'win32') {
+    const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+    return { argv: [join(systemRoot, 'explorer.exe'), target] }
+  }
+  if (process.platform === 'darwin') return { argv: ['open', target] }
+  return { argv: ['xdg-open', target] }
+}
+
+/**
  * Serve the panel's state and accept its edits.
  * @param {any} ctx - plugin context.
  * @param {any} config - the config this instance mounted with.
@@ -341,29 +362,36 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
   route(`${API_PREFIX}/open-archive`, async (req, res) => {
     if (req.method !== 'POST') return send(res, 405, { error: 'method-not-allowed' })
     const subprocess = ctx.get('subprocess')
-    if (subprocess === undefined) return send(res, 503, { error: 'subprocess-unavailable' })
+    if (subprocess === undefined) {
+      void logLine('warn', 'open-archive: subprocess service missing')
+      return send(res, 503, { error: 'subprocess-unavailable' })
+    }
     const target = archive.root
+
+    // The directory may not exist yet (nothing compressed since install, or the
+    // archive was cleaned). Creating it first is what makes the button work at
+    // all: a file manager launched on a missing path exits immediately.
     try {
       await mkdir(target, { recursive: true })
-    } catch {
+    } catch (error) {
+      void logLine('error', 'open-archive: cannot create directory', { path: target, error: String(error?.message ?? error) })
       return send(res, 500, { error: 'archive-dir-unavailable', path: target })
     }
+
+    const spec = explorerCommand(target)
     try {
-      const argv = process.platform === 'win32'
-        ? ['explorer.exe', target]
-        : process.platform === 'darwin'
-          ? ['open', target]
-          : ['xdg-open', target]
-      // Detached explorer: it exits on its own, and its exit code is meaningless.
+      // Detached: the file manager lives on and its exit code means nothing.
       subprocess.spawn({
-        argv,
+        argv: spec.argv,
         cwd: target,
         stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
         graceMs: 2000,
       })
-      send(res, 200, { opened: true })
+      void logLine('info', 'open-archive: launched', { argv: spec.argv.join(' '), path: target })
+      send(res, 200, { opened: true, path: target, command: spec.argv.join(' ') })
     } catch (error) {
-      send(res, 500, { error: 'spawn-failed', message: String(error?.message ?? error) })
+      void logLine('error', 'open-archive: spawn failed', { argv: spec.argv.join(' '), error: String(error?.message ?? error) })
+      send(res, 500, { error: 'spawn-failed', message: String(error?.message ?? error), path: target })
     }
   })
 
@@ -379,6 +407,7 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
       editable: configEditor !== undefined,
       lastFailure,
       archiveRoot: archive.root,
+      logRoot: logRoot(),
       lastArchivePath: archive.lastPath,
       pressure,
     })
@@ -414,6 +443,7 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
       totalApplied,
       lastFailure,
       archiveRoot: archive.root,
+      logRoot: logRoot(),
       lastArchivePath: archive.lastPath,
       pressure,
     })
@@ -589,20 +619,30 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
  * @returns {string | undefined} the title, or undefined when unknown.
  */
 function sessionTitleOf(session) {
+  // The title is a logged event, not a session property: `dsh-session-title`
+  // folds `session/title` (projection key `title`) to produce the very string
+  // the sidebar shows. Reading the log directly is what actually works.
   try {
-    const snapshot = ctx_sessionTitle(session)
-    if (typeof snapshot === 'string' && snapshot.trim() !== '') return snapshot.trim()
+    const end = typeof session.seq === 'number' ? session.seq : 0
+    let seen = 0
+    for (let seq = end; seq >= 0 && seen < 4000; seq -= 1) {
+      const event = session.eventAt?.(seq)
+      if (event === undefined) continue
+      seen += 1
+      if (event.type !== 'session/title') continue
+      const title = event.data?.title
+      if (typeof title === 'string' && title.trim() !== '') return title.trim()
+    }
   } catch {
-    // A missing title projection only means "use the id".
+    // A log without titles only means "use the id".
   }
-  return undefined
-}
-
-/** Session titles live on the session projection, if the Host registered it. */
-function ctx_sessionTitle(session) {
-  const title = session?.title
-  if (typeof title === 'string') return title
-  if (typeof session?.summary?.title === 'string') return session.summary.title
+  // Fall back to a projection read when the Host exposes one.
+  try {
+    const projected = session?.title
+    if (typeof projected === 'string' && projected.trim() !== '') return projected.trim()
+  } catch {
+    // ignore
+  }
   return undefined
 }
 
@@ -663,6 +703,22 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   if (lastProcessedTurn.get(session.id) === payload.turn) return
 
   lastProcessedTurn.set(session.id, payload.turn)
+
+  // Record the gate arithmetic once per turn: when a pass does not run, this is
+  // the only place that says which condition held it back.
+  const gate = {
+    turn: payload.turn,
+    session: session.id,
+    title: sessionTitleOf(session),
+    used: snapshot.used ?? snapshot.estimated,
+    window: pressure.window ?? undefined,
+  }
+  void logLine('info', 'gate', {
+    ...gate,
+    total: config.total.enabled ? rate(snapshot, pressure.window) >= config.total.pressureRatio : 'off',
+    reasoning: config.reasoning.enabled ? rate(snapshot, pressure.window) >= config.reasoning.pressureRatio : 'off',
+    tools: config.tools.enabled ? rate(snapshot, pressure.window) >= config.tools.pressureRatio : 'off',
+  })
 
   if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
     await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)
@@ -947,6 +1003,14 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
   // back to back; any that hang add up, and the pass never yields.
   const startedAt = Date.now()
   const budgetMs = Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 90000
+  void logLine('info', 'pass start', {
+    kind,
+    mode: policy.mode,
+    candidates: candidates.length,
+    totalChars,
+    session: session.id,
+    title: sessionTitleOf(session),
+  })
   while (index < candidates.length && items < maxItems && chars < maxChars) {
     // The step may have been cancelled while a model batch was in flight; never
     // write into a session whose turn has been torn down.
@@ -1005,6 +1069,14 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
       }
     }
   }
+  void logLine(items > 0 || failed > 0 ? 'info' : 'warn', 'pass end', {
+    kind,
+    items,
+    chars,
+    failed,
+    archived,
+    elapsedMs: Date.now() - startedAt,
+  })
   return { items, chars, failed, archived }
 }
 
@@ -1100,6 +1172,18 @@ function pressureSnapshot(ctx, session) {
  */
 function currentPressureTokens(ctx, session) {
   return pressureSnapshot(ctx, session).used
+}
+
+/**
+ * The current pressure as a ratio of the context window, for logging.
+ * @param {{ used?: number, estimated: number }} snapshot - pressure inputs.
+ * @param {number | null} window - context window, when known.
+ * @returns {number} the ratio, or 0 when the window is unknown.
+ */
+function rate(snapshot, window) {
+  if (typeof window !== 'number' || window <= 0) return 0
+  const used = snapshot.used ?? snapshot.estimated ?? 0
+  return used / window
 }
 
 /**

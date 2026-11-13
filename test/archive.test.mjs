@@ -11,8 +11,9 @@ const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 test('archiveRoot lives inside the plugin directory, whatever the machine', () => {
   const root = archiveRoot('')
   assert.equal(root, join(PLUGIN_ROOT, 'archive'))
-  // No host path is baked in: the root is derived from this module's own URL.
-  assert.ok(!root.includes('.dsh'), root)
+  // The point is that it follows THIS module, not that the path avoids any
+  // particular string: the plugin may legitimately live under ~/.dsh.
+  assert.ok(root.startsWith(PLUGIN_ROOT), root)
 })
 
 test('archiveRoot ignores DSH_HOME, so the archive travels with the plugin', () => {

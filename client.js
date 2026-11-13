@@ -370,6 +370,8 @@ window.__ModuleLoader__.load({
       const [totalApplied, setTotalApplied] = useState(null)
       const [lastFailure, setLastFailure] = useState(null)
       const [archiveRoot, setArchiveRoot] = useState(null)
+      const [logRoot, setLogRoot] = useState(null)
+      const [openError, setOpenError] = useState(null)
       const [openState, setOpenState] = useState('idle')
       const [lastArchivePath, setLastArchivePath] = useState(null)
       const [pressure, setPressure] = useState(null)
@@ -391,6 +393,7 @@ window.__ModuleLoader__.load({
             setStats(body.stats || { reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 })
             setLastFailure(body.lastFailure ?? null)
             setArchiveRoot(body.archiveRoot ?? null)
+            setLogRoot(body.logRoot ?? null)
             setLastArchivePath(body.lastArchivePath ?? null)
             setPressure(body.pressure ?? null)
             setRuntimeVersion(body.version ?? null)
@@ -445,6 +448,7 @@ window.__ModuleLoader__.load({
               if (body.stats) setStats(body.stats)
               setLastFailure(body.lastFailure ?? null)
               if (body.archiveRoot) setArchiveRoot(body.archiveRoot)
+              if (body.logRoot) setLogRoot(body.logRoot)
               if (body.lastArchivePath !== undefined) setLastArchivePath(body.lastArchivePath)
               if (body.pressure !== undefined) setPressure(body.pressure)
               if (body.version) setRuntimeVersion(body.version)
@@ -459,15 +463,27 @@ window.__ModuleLoader__.load({
         }, 500)
       }, [])
 
-      /** Ask the Host to reveal the archive directory in the file manager. */
+      /**
+       * Ask the Host to reveal the archive directory in the file manager.
+       *
+       * The server creates the directory first, so a fresh install (nothing
+       * compressed yet) still opens. A failure carries its reason back for the
+       * panel to show, instead of only flipping a label.
+       */
       const openArchive = useCallback(() => {
         setOpenState('opening')
+        setOpenError(null)
         fetch(`${API}/open-archive`, { method: 'POST', credentials: 'same-origin' })
-          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+          .then(async (res) => {
+            const body = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(body.error || String(res.status))
+            return body
+          })
           .then(() => setOpenState('idle'))
-          .catch(() => {
+          .catch((error) => {
             setOpenState('failed')
-            setTimeout(() => setOpenState('idle'), 3000)
+            setOpenError(String((error && error.message) || error))
+            setTimeout(() => setOpenState('idle'), 4000)
           })
       }, [])
 
@@ -777,9 +793,17 @@ window.__ModuleLoader__.load({
             },
           }, openState === 'opening' ? '打开中…' : openState === 'failed' ? '打开失败' : '打开目录'),
         ]),
+        openError
+          ? h('p', { key: 'open-err', style: { margin: 0, fontSize: 11, color: WARN, wordBreak: 'break-all' } },
+            `打开目录失败：${openError}`)
+          : null,
         lastArchivePath
           ? h('p', { key: 'latest', style: { margin: 0, fontSize: 11, color: MUTED, wordBreak: 'break-all' } },
             `最新：${lastArchivePath.split(/[\\/]/).at(-1)}`)
+          : null,
+        logRoot
+          ? h('p', { key: 'log', style: { margin: 0, fontSize: 11, color: MUTED, wordBreak: 'break-all', opacity: 0.8 } },
+            `运行日志：${logRoot}`)
           : null,
       ])
 
