@@ -16,10 +16,18 @@ const check = (name, ok, detail) => checks.push({ name, ok, detail })
 
 // 1. The pre-step handler must await the rewrite.
 const handlerBlock = src.slice(src.indexOf("ctx.on('agent/pre-step'"), src.indexOf('// The panel needs a read/write channel'))
+// The rewrite must NOT be awaited: awaiting made every model-backed pass a
+// synchronous cost on the reply, which showed up as a turn with no thinking and
+// no tool calls. Safety now comes from the turn-boundary guard instead.
 check(
-  'pre-step awaits the rewrite',
-  /await rewrite\(/.test(handlerBlock),
-  /await rewrite\(/.test(handlerBlock) ? 'found `await rewrite(`' : 'rewrite is not awaited',
+  'pre-step does not block on the rewrite',
+  !/await rewrite\(/.test(handlerBlock) && /void rewrite\(/.test(handlerBlock),
+  'rewrite runs detached and cannot stall the step',
+)
+check(
+  'detached rewrite still reports failures',
+  /\.catch\(\(error\) =>/.test(handlerBlock),
+  'a rejection is logged, not swallowed',
 )
 
 // 2. Cancellation is honoured before every append site.

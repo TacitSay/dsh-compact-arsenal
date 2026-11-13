@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-11-13
+
+### Fixed
+
+- **A model-backed pass could stall the whole reply.** The `agent/pre-step` hook
+  awaited the rewrite, so one turn waited on every summarization call in
+  sequence — up to 12 items per section across two sections — before the model
+  was even asked to answer. With a provider that stops responding, the stream
+  never finished and the turn showed no thinking, no tool calls and no reply.
+  The rewrite now runs detached: the step proceeds immediately and the pass
+  lands when it lands. Safety is unchanged because `compressSection` already
+  refuses to append once the turn has closed.
+- **A summarization call had no time bound.** `summarize()` now races the call
+  against a 45-second timeout chained to the step signal, so a silent provider
+  becomes an ordinary failure the caller can fall back from instead of an
+  indefinite await.
+- **A pass could chain model calls without yielding.** Each pass now carries a
+  wall-clock budget (`maxPassMs`, default 90 s); when it is spent the pass stops
+  and records why.
+
+### Added
+
+- `test/summarize-timeout.test.mjs`: reproduces the stall with a stream that
+  yields one delta and then never finishes, and asserts the call returns.
+- `maxPassMs` for both sections in the defaults.
+
 ## [0.8.0] — 2026-11-13
 
 ### Added

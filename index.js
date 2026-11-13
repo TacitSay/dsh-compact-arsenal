@@ -33,7 +33,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.8.0'
+export const PACKAGE_VERSION = '0.8.1'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -80,6 +80,7 @@ export const DEFAULTS = Object.freeze({
     batchChars: 12000,
     maxItems: 12,
     maxCharsPerPass: 40000,
+    maxPassMs: 90000,
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
   tools: {
@@ -95,6 +96,7 @@ export const DEFAULTS = Object.freeze({
     batchChars: 12000,
     maxItems: 12,
     maxCharsPerPass: 40000,
+    maxPassMs: 90000,
     onlyTools: [],
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
@@ -245,17 +247,25 @@ export function apply(ctx, rawConfig) {
       if (decision?.kind !== 'enter') return decision
       if (inFlight.has(payload.agent.id)) return decision
       inFlight.add(payload.agent.id)
-      try {
-        // Awaiting matters: a rewrite left running after this handler returns
-        // can append while its turn is closing, and a rejection would escape
-        // this catch entirely.
-        await rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
-      } catch (error) {
-        // A rewrite failure must never break the step.
-        ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
-      } finally {
-        inFlight.delete(payload.agent.id)
-      }
+      /**
+       * Run the rewrite WITHOUT awaiting it.
+       *
+       * Awaiting made every model-backed pass a synchronous cost on the reply:
+       * with up to 12 items per section and two sections, one turn could wait on
+       * a dozen sequential summarization calls before the model was even asked
+       * to answer. The user saw no thinking and no tool calls, which is exactly
+       * what a stalled pre-step looks like. The step now proceeds immediately and
+       * the rewrite lands when it lands; the turn-boundary guard inside
+       * `compressSection` refuses any append once the turn has closed, so running
+       * detached cannot write into a finished turn.
+       */
+      void rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
+        .catch((error) => {
+          ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
+        })
+        .finally(() => {
+          inFlight.delete(payload.agent.id)
+        })
       return decision
     })
   }
@@ -933,11 +943,19 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
   let failed = 0
   let archived = 0
   let index = 0
+  // A wall-clock budget per pass. Without it one pass can chain many model calls
+  // back to back; any that hang add up, and the pass never yields.
+  const startedAt = Date.now()
+  const budgetMs = Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 90000
   while (index < candidates.length && items < maxItems && chars < maxChars) {
     // The step may have been cancelled while a model batch was in flight; never
     // write into a session whose turn has been torn down.
     signal?.throwIfAborted?.()
     if (stillOpen !== undefined && !stillOpen()) return { items, chars, failed, archived }
+    if (Date.now() - startedAt > budgetMs) {
+      lastFailure = `${kind}: pass stopped after ${budgetMs}ms budget`
+      break
+    }
     const batch = []
     let batchSize = 0
     while (index < candidates.length && batch.length < 8 && batchSize < batchChars) {
