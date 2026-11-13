@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-11-13
+
+### Fixed
+
+- **The archive file name used the session id instead of the conversation
+  title.** The title is not a session property: `dsh-session-title` folds
+  `session/title` log events into the projection the sidebar renders. The plugin
+  read `session.title` / `session.summary.title`, neither of which exists, so
+  every record fell back to the opaque id. It now reads the logged title, so a
+  record is named `压缩--tools--model--…` rather than `session-5fd2…--tools--…`.
+- **打开目录 did nothing on a fresh install.** Nothing had been compressed yet,
+  so the directory did not exist; and the launcher was spawned as a bare
+  `explorer.exe`, which the subprocess service resolves against a scrubbed
+  `PATH`. The directory is now created first and `explorer.exe` is addressed by
+  absolute path. A failure reports its reason in the panel instead of only
+  flipping a label.
+
+### Added
+
+- **A log inside the plugin directory** (`logs/compact-arsenal.log`). Every pass
+  writes the gate arithmetic that decided whether to run, then the candidates,
+  then the outcome — which is the only place that explains "why did nothing
+  happen". Writes are serialized and the file rotates once at 2 MB.
+- The archive and log directories now appear in the panel, and both follow the
+  plugin wherever it is installed.
+
 ## [0.8.1] — 2026-11-13
 
 ### Fixed
