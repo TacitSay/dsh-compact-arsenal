@@ -45,10 +45,18 @@ check(
   /applyRewrittenText\(session, item\.event, item\.seq, kind, replacement, currentTurn\)/.test(src),
   'applyRewrittenText receives currentTurn',
 )
+// A tool/result replacement may change ONLY content, so it MUST keep the
+// node's own turn/step. (The first incident's fix wrote the current turn here,
+// which the log rejects; that is what the shape test now pins.)
 check(
-  'no append writes event.data.turn',
-  !/session\.append\(\s*'(tool\/result|assistant\/message)',\s*\{\s*turn:\s*event\.data\.turn/.test(src),
-  'no surface append copies the replaced node turn',
+  'tool/result keeps the node turn',
+  /session\.append\('tool\/result', \{\s*turn: event\.data\.turn,\s*step: event\.data\.step,/.test(src),
+  'the replacement reuses the original turn/step',
+)
+check(
+  'user/message takes the writing turn',
+  /buildUserCheckpoint\(text, kind, seq, currentTurn\)/.test(src),
+  'a new checkpoint carries the current turn',
 )
 
 // 4. The turn-boundary guard exists and is consulted.

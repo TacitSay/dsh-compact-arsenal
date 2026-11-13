@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-11-14
+
+### Fixed
+
+- **Archive file names began with the session id instead of the conversation
+  title.** The title lookup scanned backwards with a 4000-step cap, but the
+  newest title can sit thousands of events behind the tail (this session's is at
+  seq 839 with 7631 events after it), so the cap was always exhausted and every
+  name fell back to `session-<uuid>--…`. The lookup is now one forward pass over
+  the log, which finds the title regardless of position; and a session without a
+  title gets `未命名对话` rather than an opaque id, so no name ever starts with
+  `session-`.
+- **打开目录 still opened nothing.** explorer.exe returns immediately whatever
+  happens and, when an explorer process is already running, hands the request to
+  that instance instead of opening a window — so spawning it directly reported
+  success while showing nothing. The launch now goes through
+  `cmd /c start`, the same path double-clicking a folder takes.
+
+## [0.9.1] — 2026-11-13
+
+### Fixed
+
+- **Every tool/result rewrite was rejected.** The first incident's fix wrote the
+  *current* turn into a `tool/result` replacement, but the log compares every
+  non-content field verbatim and refuses the difference:
+  `tool/result surface replacement may change only content`. On a long session
+  this failed 69 times in one pass while the panel showed nothing useful. The
+  replacement now keeps the node's own `turn`/`step`; only the `user/message`
+  checkpoint takes the writing turn, because it is a new message rather than a
+  rewrite.
+- Failure reasons now reach the log (`append rejected`, `pass aborted: turn
+  closed`), so a future rejection is diagnosable without guessing.
+
+### Added
+
+- `test/turn-shape.test.mjs`: pins both replacement shapes **with a turn open**.
+  Every earlier check passed because it ran outside a turn, where the wrong
+  shape is indistinguishable from the right one.
+
 ## [0.9.0] — 2026-11-13
 
 ### Fixed

@@ -74,7 +74,7 @@ test('archiveRewrite names the file by conversation, content, method, time and n
   assert.ok(file.endsWith('--seq42.md'), `node suffix: ${file}`)
 })
 
-test('archiveRewrite falls back to the session id when no title exists', async () => {
+test('archiveRewrite never prefixes the session id when no title exists', async () => {
   const root = join(homedir(), '.dsh-compact-arsenal-test')
   const path = await archiveRewrite({
     root,
@@ -87,6 +87,9 @@ test('archiveRewrite falls back to the session id when no title exists', async (
   })
   assert.ok(path !== undefined)
   const file = path.slice(root.length + 1).split(/[\\/]/).at(-1)
-  assert.ok(file.startsWith('session-abc--'), file)
+  // An id prefix makes every name start with the same opaque string; a record
+  // without a title gets a neutral placeholder instead.
+  assert.ok(!file.startsWith('session-'), file)
+  assert.ok(file.startsWith('未命名对话--'), file)
 })
 

@@ -22,6 +22,7 @@ import {
   TOOL_MARKER,
   alreadyRewritten,
 } from './lib/policy.js'
+import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -35,7 +36,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.9.0'
+export const PACKAGE_VERSION = '0.9.2'
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -292,6 +293,10 @@ const API_PREFIX = '/compact-arsenal/api'
  */
 function explorerCommand(target) {
   if (process.platform === 'win32') {
+    // A bare directory path is the form Windows documents for opening a folder.
+    // The earlier failure was not the argument: explorer was spawned through a
+    // managed-subprocess service that reaped it. Now it is spawned detached, so
+    // the plain path is both correct and the simplest thing that works.
     const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
     return { argv: [join(systemRoot, 'explorer.exe'), target] }
   }
@@ -380,15 +385,33 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
 
     const spec = explorerCommand(target)
     try {
-      // Detached: the file manager lives on and its exit code means nothing.
-      subprocess.spawn({
-        argv: spec.argv,
+      // On Windows the launch goes through `cmd /c start` rather than spawning
+      // explorer directly. explorer.exe has two habits that make a direct spawn
+      // look like it worked when it did not: it returns immediately whatever
+      // happens (so a failure is invisible), and when an explorer process is
+      // already running it hands the request to that instance and exits — a
+      // child reaped with the request never delivers it. `start` goes through
+      // the shell, the same path as double-clicking a folder.
+      //
+      // Elsewhere the launcher is a normal foreground program, so a detached
+      // spawn of it is correct as-is.
+      const launch = process.platform === 'win32'
+        ? { command: 'cmd.exe', args: ['/c', 'start', '', spec.argv[0], ...spec.argv.slice(1)] }
+        : { command: spec.argv[0], args: spec.argv.slice(1) }
+      const child = spawn(launch.command, launch.args, {
         cwd: target,
-        stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
-        graceMs: 2000,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        windowsVerbatimArguments: process.platform === 'win32',
       })
-      void logLine('info', 'open-archive: launched', { argv: spec.argv.join(' '), path: target })
-      send(res, 200, { opened: true, path: target, command: spec.argv.join(' ') })
+      child.unref()
+      void logLine('info', 'open-archive: launched', {
+        argv: [launch.command, ...launch.args].join(' '),
+        path: target,
+        pid: child.pid,
+      })
+      send(res, 200, { opened: true, path: target, command: spec.argv.join(' '), pid: child.pid })
     } catch (error) {
       void logLine('error', 'open-archive: spawn failed', { argv: spec.argv.join(' '), error: String(error?.message ?? error) })
       send(res, 500, { error: 'spawn-failed', message: String(error?.message ?? error), path: target })
@@ -621,18 +644,22 @@ async function totalPass(ctx, session, total, turn, signal, stats, archive) {
 function sessionTitleOf(session) {
   // The title is a logged event, not a session property: `dsh-session-title`
   // folds `session/title` (projection key `title`) to produce the very string
-  // the sidebar shows. Reading the log directly is what actually works.
+  // the sidebar shows.
+  //
+  // A backward scan cannot be bounded: the newest title can sit thousands of
+  // events behind the tail (this session's is at seq 839 with 7575 events after
+  // it), so any step limit silently falls back to the id. One forward pass over
+  // the log is what actually finds it, and only the LAST title wins.
   try {
     const end = typeof session.seq === 'number' ? session.seq : 0
-    let seen = 0
-    for (let seq = end; seq >= 0 && seen < 4000; seq -= 1) {
+    let title
+    for (let seq = 0; seq <= end; seq += 1) {
       const event = session.eventAt?.(seq)
-      if (event === undefined) continue
-      seen += 1
-      if (event.type !== 'session/title') continue
-      const title = event.data?.title
-      if (typeof title === 'string' && title.trim() !== '') return title.trim()
+      if (event?.type !== 'session/title') continue
+      const value = event.data?.title
+      if (typeof value === 'string' && value.trim() !== '') title = value.trim()
     }
+    if (title !== undefined) return title
   } catch {
     // A log without titles only means "use the id".
   }
@@ -802,27 +829,6 @@ function sectionText(event, kind) {
  * @returns {void}
  */
 /**
- * Copy of `event.data.turn` replaced by the turn that is open right now.
- *
- * A surface replacement must carry the turn that owns the write, not the turn
- * the replaced node was created in: the node may be dozens of turns old, and a
- * row claiming a closed turn either fails the log's relationship check or slips
- * through while claiming a turn that does not match its position.
- *
- * @param {any} session - live session.
- * @param {any} event - the node being replaced.
- * @param {number} currentTurn - turn owning this write.
- * @returns {{ turn: number, step: number }} position fields for the new row.
- */
-function currentPosition(session, event, currentTurn) {
-  const turn = Number.isFinite(currentTurn) ? currentTurn : event.data.turn
-  // Keep the step only when the write belongs to the same turn as the node;
-  // otherwise the step number of an old turn is meaningless.
-  const step = turn === event.data.turn && Number.isFinite(event.data.step) ? event.data.step : 1
-  return { turn, step }
-}
-
-/**
  * Rewrite one node's text, using the only shape the log accepts for each type.
  *
  * `tool/result` may be replaced in place because it can cite the node it
@@ -846,8 +852,13 @@ function applyRewrittenText(session, event, seq, kind, text, currentTurn) {
     const blocks = event.data?.message?.content ?? []
     const rich = blocks.filter((block) => block?.type !== 'text')
     const message = { ...event.data.message, content: [{ type: 'text', text }, ...rich] }
+    // A tool/result replacement may change ONLY content: the log compares every
+    // other field verbatim after blanking content, so reusing the node's own
+    // turn/step is mandatory. Writing the current turn here is rejected with
+    // "tool/result surface replacement may change only content".
     session.append('tool/result', {
-      ...currentPosition(session, event, currentTurn),
+      turn: event.data.turn,
+      step: event.data.step,
       message,
       ...(event.data.error === undefined ? {} : { error: event.data.error }),
       ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
@@ -856,6 +867,8 @@ function applyRewrittenText(session, event, seq, kind, text, currentTurn) {
   }
 
   // Reasoning: replace the node with a user-role checkpoint that cites it.
+  // This is a NEW message rather than a rewrite of an existing one, so it takes
+  // the turn that owns the write.
   const checkpoint = buildUserCheckpoint(text, kind, seq, currentTurn)
   session.append('user/message', checkpoint, {
     surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },
@@ -1015,7 +1028,10 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
     // The step may have been cancelled while a model batch was in flight; never
     // write into a session whose turn has been torn down.
     signal?.throwIfAborted?.()
-    if (stillOpen !== undefined && !stillOpen()) return { items, chars, failed, archived }
+    if (stillOpen !== undefined && !stillOpen()) {
+      void logLine('warn', 'pass aborted: turn closed', { kind, turn: currentTurn, items })
+      return { items, chars, failed, archived }
+    }
     if (Date.now() - startedAt > budgetMs) {
       lastFailure = `${kind}: pass stopped after ${budgetMs}ms budget`
       break
@@ -1035,7 +1051,10 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
 
     for (let i = 0; i < batch.length; i += 1) {
       signal?.throwIfAborted?.()
-      if (stillOpen !== undefined && !stillOpen()) return { items, chars, failed, archived }
+      if (stillOpen !== undefined && !stillOpen()) {
+      void logLine('warn', 'pass aborted: turn closed', { kind, turn: currentTurn, items })
+      return { items, chars, failed, archived }
+    }
       const item = batch[i]
       const summary = summaries === null ? null : summaries[i]
       const replacement = buildReplacement(item.text, policy, marker, summary)
@@ -1047,6 +1066,16 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
       } catch (error) {
         failed += 1
         lastFailure = `#${item.seq}: ${error?.message ?? error}`
+        // The first rejection of a pass explains the whole pass, and the panel
+        // only shows the latest one. Log the first three so the reason survives.
+        if (failed <= 3) {
+          void logLine('error', 'append rejected', {
+            kind,
+            seq: item.seq,
+            turn: currentTurn,
+            error: String(error?.message ?? error),
+          })
+        }
         ctx.logger?.warn?.(`[compact-arsenal] ${kind} replacement rejected: ${error?.message ?? error}`)
         continue
       }
