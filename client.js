@@ -376,6 +376,8 @@ window.__ModuleLoader__.load({
       const [lastArchivePath, setLastArchivePath] = useState(null)
       const [pressure, setPressure] = useState(null)
       const [runtimeVersion, setRuntimeVersion] = useState(null)
+      /** Update-check outcome: idle | checking | outdated | current | unknown. */
+      const [update, setUpdate] = useState({ state: 'idle', latest: null, message: null })
       /** Provider/model catalog from the live `llm` registry; empty until loaded. */
       const [catalog, setCatalog] = useState({ providers: [], models: [] })
       const timer = useRef(null)
@@ -655,6 +657,19 @@ window.__ModuleLoader__.load({
         },
       }, [total, reasoning, tools])
 
+      /**
+       * State the order out loud.
+       *
+       * The sections are listed cheapest-last in the code, but they run
+       * cheapest-FIRST, and each one re-measures before deciding. Saying so
+       * stops "why did my tool threshold not fire" from being a mystery: it did
+       * not fire because an earlier pass already brought the session down.
+       */
+      const cascadeNote = h('p', {
+        key: 'cascade',
+        style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 },
+      }, '执行顺序：工具输出 → 思考 → 总压缩。每一步结束后重新测量，压力已降到下一步阈值以下就停下——所以机械方式够用时不会调用模型。')
+
       const statsLine = h('div', {
         style: { display: 'flex', flexDirection: 'column', gap: 4 },
       }, [
@@ -684,6 +699,44 @@ window.__ModuleLoader__.load({
        * update check exists, it flips `updateAvailable` and the same button
        * becomes actionable without moving anything.
        */
+      /**
+       * Trigger a version check and render its outcome on the button.
+       *
+       * The states are deliberately distinct: "newer exists" must not look like
+       * "up to date", and "could not check" must not look like either — an
+       * offline desktop is normal and reporting it as a failure would train the
+       * user to ignore the button.
+       */
+      const checkUpdate = useCallback(() => {
+        setUpdate({ state: 'checking', latest: null, message: null })
+        fetch(`${API}/update-check`, { credentials: 'same-origin' })
+          .then(async (res) => {
+            const body = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(body.error || String(res.status))
+            return body
+          })
+          .then((body) => {
+            if (body.status === 'outdated') {
+              setUpdate({ state: 'outdated', latest: body.latest, message: null })
+              return
+            }
+            if (body.status === 'current') {
+              setUpdate({ state: 'current', latest: body.latest, message: null })
+              return
+            }
+            setUpdate({ state: 'unknown', latest: null, message: body.status })
+          })
+          .catch((error) => {
+            setUpdate({ state: 'unknown', latest: null, message: String((error && error.message) || error) })
+          })
+      }, [])
+
+      const updateLabel = update.state === 'checking' ? '检查中…'
+        : update.state === 'outdated' ? `可更新 v${update.latest}`
+          : update.state === 'current' ? '已是最新'
+            : update.state === 'unknown' ? '无法检查'
+              : '检查更新'
+
       const versionBadge = h('div', {
         key: 'version',
         style: { display: 'flex', alignItems: 'center', gap: 6 },
@@ -699,14 +752,22 @@ window.__ModuleLoader__.load({
         h('button', {
           key: 'check',
           type: 'button',
-          disabled: true,
-          title: '检查更新（预留：将由插件市场提供）',
+          disabled: update.state === 'checking',
+          title: update.state === 'outdated'
+            ? `npm 上已有 ${update.latest}，当前 ${runtimeVersion ?? '?'}`
+            : update.state === 'unknown'
+              ? `无法检查更新：${update.message || '未知原因'}`
+              : '查询 npm 上是否有更新版本',
+          onClick: () => checkUpdate(),
           style: {
             fontSize: 11, padding: '1px 8px', borderRadius: 999,
-            border: `1px solid ${LINE}`, background: 'transparent',
-            color: MUTED, cursor: 'not-allowed', opacity: 0.55,
+            border: `1px solid ${update.state === 'outdated' ? WARN : LINE}`,
+            background: 'transparent',
+            color: update.state === 'outdated' ? WARN : MUTED,
+            cursor: update.state === 'checking' ? 'wait' : 'pointer',
+            opacity: update.state === 'checking' ? 0.6 : 1,
           },
-        }, '检查更新'),
+        }, updateLabel),
       ])
 
       const header = h('header', {
@@ -812,7 +873,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, sections, archiveCard, statsLine])
+      }, [header, cascadeNote, sections, archiveCard, statsLine])
     }
 
     return {

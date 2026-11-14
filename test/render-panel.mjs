@@ -29,7 +29,10 @@ globalThis.window = {
   },
 }
 
-new Function(readFileSync('E:/DSH/DSH/dsh-compact-arsenal/client.js', 'utf8'))()
+// Resolve the client bundle relative to THIS file, so the test keeps working
+// wherever the plugin is installed.
+const CLIENT = new URL('../client.js', import.meta.url)
+new Function(readFileSync(CLIENT, 'utf8'))()
 
 let Registered
 plugin.apply({
@@ -96,6 +99,7 @@ const checks = {
   'title present': all.includes('上下文压缩'),
   'retention card present': all.includes('压缩留存'),
   'three sections present': all.includes('总压缩') && all.includes('思考压缩') && all.includes('工具输出压缩'),
+  'cascade order stated': all.includes('工具输出') && all.includes('重新测量'),
   'no leftover subtitle': !all.includes('开关即生效'),
   'no pressure row': !all.includes('上下文压力：真实'),
   'no safety footer': !all.includes('安全边界'),

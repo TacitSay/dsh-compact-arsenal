@@ -43,7 +43,7 @@ test('an explicit archiveDir wins over both defaults', () => {
   assert.equal(archiveRoot('D:/custom/archive'), 'D:/custom/archive')
 })
 
-test('archiveRewrite names the file by conversation, content, method, time and node', async () => {
+test('identity is the directory; the file name carries only what varies', async () => {
   const root = join(homedir(), '.dsh-compact-arsenal-test')
   const at = new Date('2026-11-11T21:45:30').getTime()
   const path = await archiveRewrite({
@@ -65,11 +65,17 @@ test('archiveRewrite names the file by conversation, content, method, time and n
   // One sanitised session directory plus the record file: never an extra level.
   assert.equal(segments.length, 2, `expected session dir + file, got ${relative}`)
 
-  const file = segments[1]
-  // Conversation first so one session sorts together, then content / method /
-  // timestamp / node — the order a reader scans when comparing compactions.
-  assert.ok(file.startsWith('WordCut-'), `file should start with the title: ${file}`)
-  assert.ok(file.includes('--tools--model--'), `content and method in the name: ${file}`)
+  const [dir, file] = segments
+
+  // The directory is the identity: title first (what a reader scans for), then
+  // the session id (what is unambiguous).
+  assert.ok(dir.startsWith('WordCut-'), `directory leads with the title: ${dir}`)
+  assert.ok(dir.includes('session-test'), `directory carries the session id: ${dir}`)
+
+  // The file name repeats neither: only content, method, time and node.
+  assert.ok(!file.includes('WordCut'), `file must not repeat the title: ${file}`)
+  assert.ok(!file.includes('session'), `file must not repeat the id: ${file}`)
+  assert.ok(file.startsWith('tools--model--'), `content and method lead the file name: ${file}`)
   assert.match(file, /--\d{8}-\d{6}--/, `timestamp segment: ${file}`)
   assert.ok(file.endsWith('--seq42.md'), `node suffix: ${file}`)
 })
@@ -86,10 +92,12 @@ test('archiveRewrite never prefixes the session id when no title exists', async 
     replacement: 'b',
   })
   assert.ok(path !== undefined)
-  const file = path.slice(root.length + 1).split(/[\\/]/).at(-1)
-  // An id prefix makes every name start with the same opaque string; a record
-  // without a title gets a neutral placeholder instead.
-  assert.ok(!file.startsWith('session-'), file)
-  assert.ok(file.startsWith('未命名对话--'), file)
+  const relative = path.slice(root.length + 1)
+  const [dir, file] = relative.split(/[\\/]/)
+  // A record without a title still gets a neutral placeholder in the directory,
+  // so the layout stays predictable; the file name never carries identity.
+  assert.ok(dir.startsWith('未命名对话--'), dir)
+  assert.ok(dir.endsWith('session-abc'), dir)
+  assert.ok(!file.includes('session'), file)
 })
 

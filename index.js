@@ -36,7 +36,36 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.9.2'
+export const PACKAGE_VERSION = '0.10.0'
+
+/** The published package to compare against; empty disables the update check. */
+export const PACKAGE_NAME = 'dsh-compact-arsenal'
+
+/**
+ * Compare two dotted versions by their numeric parts.
+ *
+ * Prerelease tags are ignored on purpose: this only decides "is there something
+ * newer to offer", and offering a prerelease to a stable install would be
+ * wrong more often than right.
+ *
+ * @param {string} a - candidate version.
+ * @param {string} b - installed version.
+ * @returns {number} positive when `a` is newer, negative when older, 0 when equal.
+ */
+export function compareVersions(a, b) {
+  const parse = (v) => String(v).split('-')[0].split('.').map((n) => {
+    const parsed = Number.parseInt(n, 10)
+    return Number.isFinite(parsed) ? parsed : 0
+  })
+  const left = parse(a)
+  const right = parse(b)
+  const length = Math.max(left.length, right.length)
+  for (let i = 0; i < length; i += 1) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
 
 /** Host services this plugin reads; all ship with dsh-base or dsh-web-app. */
 export const inject = ['sessions', 'tokenMeter', 'webServer', 'configEditor']
@@ -355,6 +384,48 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
       send(res, 200, { providers, models })
     } catch (error) {
       send(res, 500, { error: 'list-failed', message: String(error?.message ?? error), providers: [], models: [] })
+    }
+  })
+
+  /**
+   * Report whether a newer published version exists.
+   *
+   * The check reads the npm registry from the Host, not the browser: the panel
+   * is served from localhost and a browser fetch to npmjs.org would be blocked
+   * or leak the user's address to a third party. Only the version string and a
+   * changelog pointer come back — nothing about the local install leaves this
+   * process.
+   *
+   * A failure is reported as an ordinary state, not an error: being offline is
+   * the normal case for a desktop plugin and must not look like a fault.
+   */
+  route(`${API_PREFIX}/update-check`, async (req, res) => {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
+    const current = PACKAGE_VERSION
+    if (PACKAGE_NAME === '') {
+      return send(res, 200, { current, latest: null, status: 'unknown-package' })
+    }
+    try {
+      const response = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
+        headers: { accept: 'application/vnd.npm.install-v1+json' },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (response.status === 404) return send(res, 200, { current, latest: null, status: 'not-published' })
+      if (!response.ok) throw new Error(`registry ${response.status}`)
+      const body = await response.json()
+      const latest = typeof body?.version === 'string' ? body.version : null
+      if (latest === null) return send(res, 200, { current, latest: null, status: 'no-version' })
+      const status = compareVersions(latest, current)
+      void logLine('info', 'update-check', { current, latest, status })
+      send(res, 200, {
+        current,
+        latest,
+        status: status > 0 ? 'outdated' : 'current',
+        url: `https://github.com/TacitSay/dsh-compact-arsenal/releases`,
+      })
+    } catch (error) {
+      void logLine('warn', 'update-check failed', { error: String(error?.message ?? error) })
+      send(res, 200, { current, latest: null, status: 'offline', message: String(error?.message ?? error) })
     }
   })
 
@@ -747,10 +818,8 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
     tools: config.tools.enabled ? rate(snapshot, pressure.window) >= config.tools.pressureRatio : 'off',
   })
 
-  if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
-    await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)
-  }
-
+  // Total runs LAST (see the cascade below): it rewrites whole turns, so every
+  // cheaper pass gets a chance to relieve the pressure first.
   const nodes = [...session.surface.nodes]
   const assistantSeqs = []
   const toolSeqs = []
@@ -778,20 +847,56 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   // per-record decision stays a single field read.
   const withArchive = (section) => ({ ...section, archiveEnabled: config.archiveEnabled })
 
-  if (config.reasoning.enabled && underPressure(ctx, session, config.reasoning.pressureRatio)) {
-    const saved = await compressSection(ctx, session, withArchive(config.reasoning), 'reasoning', dropRecent(assistantSeqs, config.reasoning.keepLast), payload.signal, archive, payload.turn, stillOpen)
-    stats.reasoning += saved.items
+  /**
+   * Cascade, cheapest first — the same discipline the shipped pruner follows:
+   * relieve pressure with the pass that costs no model call, re-measure, and
+   * only escalate while the pressure is still above the next section's
+   * threshold.
+   *
+   * Without this, two model-backed sections sharing a threshold both fire on
+   * the same turn: each pays for its own summarization call even though the
+   * first one already brought the session back under pressure. The cheap pass
+   * lands first, so most turns never reach the model at all.
+   *
+   * Order is fixed by cost and by reach:
+   *   1. tools (mechanical when configured, narrowest blast radius)
+   *   2. reasoning
+   *   3. total (rewrites whole turns; the most destructive and most expensive)
+   */
+  const cascade = [
+    { key: 'tools', section: config.tools, kind: 'tools', seqs: () => toolSeqs },
+    { key: 'reasoning', section: config.reasoning, kind: 'reasoning', seqs: () => assistantSeqs },
+  ]
+
+  for (const step of cascade) {
+    const section = step.section
+    if (!section.enabled) continue
+    // Re-read the session each time: a landed pass changed its size, and the
+    // whole point of the cascade is to act on that new size.
+    if (!underPressure(ctx, session, section.pressureRatio)) {
+      void logLine('info', 'cascade skip', { section: step.key, reason: 'below threshold' })
+      continue
+    }
+    const saved = await compressSection(
+      ctx, session, withArchive(section), step.kind,
+      dropRecent(step.seqs(), section.keepLast),
+      payload.signal, archive, payload.turn, stillOpen,
+    )
+    stats[step.key] += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
     stats.archived += saved.archived ?? 0
+    void logLine('info', 'cascade step', {
+      section: step.key,
+      items: saved.items,
+      chars: saved.chars,
+      failed: saved.failed ?? 0,
+    })
   }
 
-  if (config.tools.enabled && underPressure(ctx, session, config.tools.pressureRatio)) {
-    const saved = await compressSection(ctx, session, withArchive(config.tools), 'tools', dropRecent(toolSeqs, config.tools.keepLast), payload.signal, archive, payload.turn, stillOpen)
-    stats.tools += saved.items
-    stats.failed += saved.failed ?? 0
-    stats.chars += saved.chars
-    stats.archived += saved.archived ?? 0
+  // Total last: it rewrites whole turns, so everything cheaper ran first.
+  if (config.total.enabled && underPressure(ctx, session, config.total.pressureRatio)) {
+    await totalPass(ctx, session, config.total, payload.turn, payload.signal, stats, archive)
   }
 }
 

@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **检查更新 actually checks.** The button queries the npm registry from the
+  Host and reports one of four distinct states — checking, up to date, a newer
+  version exists, or cannot check — instead of being a disabled placeholder.
+  Version comparison is numeric: `0.9.3` sorts before `0.10.0`, which a string
+  comparison gets backwards. Prerelease tags are ignored so a stable install is
+  never offered a beta. The request is made server-side, so the panel does not
+  contact a third party from the browser.
+
+## [0.10.0] — 2026-11-14
+
+### Changed
+
+- **Sections now run as a cascade, cheapest first.** Before this, every enabled
+  section evaluated its own threshold independently: with two model-backed
+  sections sharing a ratio, both fired on the same turn and each paid for its own
+  summarization call even though the first had already relieved the pressure.
+  The order is now tools → reasoning → total, each re-measuring the session
+  before deciding, so a cheap pass that brings the session back under pressure
+  means the later, pricier passes never run. This mirrors the shipped pruner,
+  which also trims and re-measures before considering a model call.
+- **`total` moved to the end of the pass.** It rewrites whole turns — the most
+  destructive step — so it should only be reached when nothing narrower sufficed.
+- The panel states the execution order and the re-measurement rule, so "my tool
+  threshold did not fire" has a visible answer.
+
+### Added
+
+- `test/cascade.test.mjs`: pins that a relieving pass stops the escalation, that
+  a still-high reading escalates, and that disabled sections are skipped.
+- `test/render-panel.mjs` now resolves the client bundle relative to itself, so
+  it works from any install path.
+
+## [0.9.3] — 2026-11-14
+
+### Changed
+
+- **Identity moved from the file name to the directory.** The layout is now
+  `<root>/<对话名>--<会话id>/<内容>--<方式>--<时间>--seq<N>.md`:
+  the directory states which conversation a record belongs to, once, and the
+  file names inside carry only what varies between records. Before this, every
+  file repeated the conversation and the session id, so a listing was dominated
+  by text that was identical on every row.
+
 ## [0.9.2] — 2026-11-14
 
 ### Fixed
