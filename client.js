@@ -673,12 +673,15 @@ window.__ModuleLoader__.load({
       const statsLine = h('div', {
         style: { display: 'flex', flexDirection: 'column', gap: 4 },
       }, [
-        h('p', {
-          key: 'run',
-          style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
-        }, config.enabled
-          ? `本次进程已执行：思考 ${stats.reasoning} 次、工具 ${stats.tools} 次、总压缩 ${stats.total ?? 0} 次，共省下约 ${stats.chars} 字符。`
-          : '总开关已关闭：三个板块都不会执行。'),
+        // The per-run counters are gone on purpose: they only ever showed this
+        // process's totals, which read as "0 次" on a fresh start and told a
+        // reader nothing. The switch state is the one thing still worth saying.
+        config.enabled
+          ? null
+          : h('p', {
+            key: 'off',
+            style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
+          }, '总开关已关闭：三个板块都不会执行。'),
         stats.failed > 0
           ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },
             `失败 ${stats.failed} 次（未落盘，不计入节省）：${lastFailure || '原因未记录'}`)

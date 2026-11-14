@@ -103,6 +103,7 @@ const checks = {
   'no leftover subtitle': !all.includes('开关即生效'),
   'no pressure row': !all.includes('上下文压力：真实'),
   'no safety footer': !all.includes('安全边界'),
+  'no per-run counters': !all.includes('本次进程已执行'),
 }
 console.log('')
 for (const [name, ok] of Object.entries(checks)) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`)
