@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **README rewritten around what a reader actually asks.** It now opens with a
+  one-line definition, has a quick-start, documents the cascade order as the
+  core design rather than three unrelated switches, and reports measured
+  before/after numbers per section instead of estimates. A dedicated
+  「你可能担心的事」 section records the real concerns — over-aggressive
+  trimming, repeated model spend, prompt-cache invalidation, and the two log
+  corruption incidents — because a document that only lists upsides is marketing.
+- Every branch of the update check is logged, including the ones that never
+  reach the network, so a click can never be invisible in the log.
+
+### Added
+
+- `test/readme.test.mjs`: pins the README's required sections, its one-line
+  definition, and that the install line carries no version number that would rot.
+
 ### Added
 
 - **检查更新 actually checks.** The button queries the npm registry from the

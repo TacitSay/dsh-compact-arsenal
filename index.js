@@ -402,30 +402,45 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
   route(`${API_PREFIX}/update-check`, async (req, res) => {
     if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
     const current = PACKAGE_VERSION
+    // Every branch of a check is logged, including the ones that never reach
+    // the network: a click that produced no line would be indistinguishable
+    // from a click the panel never sent.
+    const started = Date.now()
+    const reply = (body, level = 'info') => {
+      void logLine(level, 'update-check', {
+        status: body.status,
+        current,
+        latest: body.latest ?? undefined,
+        elapsedMs: Date.now() - started,
+        ...(body.message === undefined ? {} : { message: body.message }),
+      })
+      send(res, 200, body)
+    }
+
     if (PACKAGE_NAME === '') {
-      return send(res, 200, { current, latest: null, status: 'unknown-package' })
+      return reply({ current, latest: null, status: 'unknown-package' }, 'warn')
     }
     try {
       const response = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
         headers: { accept: 'application/vnd.npm.install-v1+json' },
         signal: AbortSignal.timeout(10000),
       })
-      if (response.status === 404) return send(res, 200, { current, latest: null, status: 'not-published' })
+      if (response.status === 404) {
+        return reply({ current, latest: null, status: 'not-published' }, 'warn')
+      }
       if (!response.ok) throw new Error(`registry ${response.status}`)
       const body = await response.json()
       const latest = typeof body?.version === 'string' ? body.version : null
-      if (latest === null) return send(res, 200, { current, latest: null, status: 'no-version' })
-      const status = compareVersions(latest, current)
-      void logLine('info', 'update-check', { current, latest, status })
-      send(res, 200, {
+      if (latest === null) return reply({ current, latest: null, status: 'no-version' }, 'warn')
+      const order = compareVersions(latest, current)
+      reply({
         current,
         latest,
-        status: status > 0 ? 'outdated' : 'current',
-        url: `https://github.com/TacitSay/dsh-compact-arsenal/releases`,
+        status: order > 0 ? 'outdated' : 'current',
+        url: 'https://github.com/TacitSay/dsh-compact-arsenal/releases',
       })
     } catch (error) {
-      void logLine('warn', 'update-check failed', { error: String(error?.message ?? error) })
-      send(res, 200, { current, latest: null, status: 'offline', message: String(error?.message ?? error) })
+      reply({ current, latest: null, status: 'offline', message: String(error?.message ?? error) }, 'warn')
     }
   })
 
