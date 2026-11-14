@@ -4,108 +4,90 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+Version numbers follow SemVer literally:
 
-### Changed
+- **Y (次版本)** goes up for a backward-compatible feature. Z resets to 0.
+- **Z (修订号)** goes up only for a backward-compatible fix. Several fixes may be
+  batched into one release; there is no rule that each commit gets its own.
+- **X (主版本)** would go up for an incompatible change — the plugin's public
+  surface is its config keys, its panel, and the files it writes.
 
-- **README rewritten around what a reader actually asks.** It now opens with a
-  one-line definition, has a quick-start, documents the cascade order as the
-  core design rather than three unrelated switches, and reports measured
-  before/after numbers per section instead of estimates. A dedicated
-  「你可能担心的事」 section records the real concerns — over-aggressive
-  trimming, repeated model spend, prompt-cache invalidation, and the two log
-  corruption incidents — because a document that only lists upsides is marketing.
-- Every branch of the update check is logged, including the ones that never
-  reach the network, so a click can never be invisible in the log.
+Since the project is still `0.y.z`, everything is allowed to change, but the
+same discipline applies: a release is a decision, not a byproduct of finishing a
+task.
 
-### Added
+## [0.11.0] — 2026-11-14
 
-- `test/readme.test.mjs`: pins the README's required sections, its one-line
-  definition, and that the install line carries no version number that would rot.
-
-### Added
-
-- **检查更新 actually checks.** The button queries the npm registry from the
-  Host and reports one of four distinct states — checking, up to date, a newer
-  version exists, or cannot check — instead of being a disabled placeholder.
-  Version comparison is numeric: `0.9.3` sorts before `0.10.0`, which a string
-  comparison gets backwards. Prerelease tags are ignored so a stable install is
-  never offered a beta. The request is made server-side, so the panel does not
-  contact a third party from the browser.
-
-## [0.10.0] — 2026-11-14
-
-### Changed
-
-- **Sections now run as a cascade, cheapest first.** Before this, every enabled
-  section evaluated its own threshold independently: with two model-backed
-  sections sharing a ratio, both fired on the same turn and each paid for its own
-  summarization call even though the first had already relieved the pressure.
-  The order is now tools → reasoning → total, each re-measuring the session
-  before deciding, so a cheap pass that brings the session back under pressure
-  means the later, pricier passes never run. This mirrors the shipped pruner,
-  which also trims and re-measures before considering a model call.
-- **`total` moved to the end of the pass.** It rewrites whole turns — the most
-  destructive step — so it should only be reached when nothing narrower sufficed.
-- The panel states the execution order and the re-measurement rule, so "my tool
-  threshold did not fire" has a visible answer.
+Consolidates everything after the published `0.9.0`. Those intermediate numbers
+(0.9.1–0.10.0) were never released, so they are folded into this one: two
+features justify a minor bump, and the fixes ride along in it.
 
 ### Added
 
-- `test/cascade.test.mjs`: pins that a relieving pass stops the escalation, that
-  a still-high reading escalates, and that disabled sections are skipped.
-- `test/render-panel.mjs` now resolves the client bundle relative to itself, so
-  it works from any install path.
-
-## [0.9.3] — 2026-11-14
-
-### Changed
-
-- **Identity moved from the file name to the directory.** The layout is now
-  `<root>/<对话名>--<会话id>/<内容>--<方式>--<时间>--seq<N>.md`:
-  the directory states which conversation a record belongs to, once, and the
-  file names inside carry only what varies between records. Before this, every
-  file repeated the conversation and the session id, so a listing was dominated
-  by text that was identical on every row.
-
-## [0.9.2] — 2026-11-14
+- **Sections run as a cascade, cheapest first.** Every enabled section used to
+  evaluate its own threshold independently, so two model-backed sections sharing
+  a ratio both fired on the same turn and each paid for its own summarization
+  call even though the first had already relieved the pressure. The order is now
+  tools → reasoning → total, each re-measuring the session before deciding, so a
+  cheap pass that brings the session back under pressure means the later,
+  pricier passes never run. This mirrors the shipped pruner, which also trims and
+  re-measures before considering a model call.
+- **检查更新 actually checks.** The button queries the npm registry from the Host
+  and reports one of four distinct states — checking, up to date, a newer version
+  exists, or cannot check — instead of being a disabled placeholder. Version
+  comparison is numeric: `0.9.3` sorts before `0.10.0`, which a string comparison
+  gets backwards. Prerelease tags are ignored, so a stable install is never
+  offered a beta. The request is made server-side, so the panel does not contact
+  a third party from the browser.
+- Every branch of the update check is logged, including the ones that never reach
+  the network, so a click can never be invisible in the log.
+- `total` moved to the end of the pass: it rewrites whole turns, the most
+  destructive step, so it is only reached when nothing narrower sufficed.
 
 ### Fixed
 
-- **Archive file names began with the session id instead of the conversation
-  title.** The title lookup scanned backwards with a 4000-step cap, but the
-  newest title can sit thousands of events behind the tail (this session's is at
-  seq 839 with 7631 events after it), so the cap was always exhausted and every
-  name fell back to `session-<uuid>--…`. The lookup is now one forward pass over
-  the log, which finds the title regardless of position; and a session without a
-  title gets `未命名对话` rather than an opaque id, so no name ever starts with
-  `session-`.
-- **打开目录 still opened nothing.** explorer.exe returns immediately whatever
-  happens and, when an explorer process is already running, hands the request to
-  that instance instead of opening a window — so spawning it directly reported
-  success while showing nothing. The launch now goes through
-  `cmd /c start`, the same path double-clicking a folder takes.
-
-## [0.9.1] — 2026-11-13
-
-### Fixed
-
-- **Every tool/result rewrite was rejected.** The first incident's fix wrote the
-  *current* turn into a `tool/result` replacement, but the log compares every
-  non-content field verbatim and refuses the difference:
+- **Every tool/result rewrite was rejected.** The earlier fix wrote the *current*
+  turn into a `tool/result` replacement, but the log compares every non-content
+  field verbatim and refuses the difference:
   `tool/result surface replacement may change only content`. On a long session
   this failed 69 times in one pass while the panel showed nothing useful. The
   replacement now keeps the node's own `turn`/`step`; only the `user/message`
   checkpoint takes the writing turn, because it is a new message rather than a
   rewrite.
 - Failure reasons now reach the log (`append rejected`, `pass aborted: turn
-  closed`), so a future rejection is diagnosable without guessing.
+  closed`), so a rejection is diagnosable without guessing.
+- **Archive file names began with the session id instead of the conversation
+  title.** The title lookup scanned backwards with a 4000-step cap, but the
+  newest title can sit thousands of events behind the tail (one session's is at
+  seq 839 with 7631 events after it), so the cap was always exhausted and every
+  name fell back to `session-<uuid>--…`. The lookup is one forward pass now, and
+  a session without a title gets `未命名对话` rather than an opaque id.
+- **打开目录 opened nothing.** explorer.exe returns immediately whatever happens
+  and, when an explorer process is already running, hands the request to that
+  instance instead of opening a window — so spawning it directly reported success
+  while showing nothing. The launch goes through `cmd /c start` now, the same
+  path double-clicking a folder takes.
 
-### Added
+### Changed
 
-- `test/turn-shape.test.mjs`: pins both replacement shapes **with a turn open**.
-  Every earlier check passed because it ran outside a turn, where the wrong
-  shape is indistinguishable from the right one.
+- **Archive layout: identity moved from the file name to the directory.** The
+  shape is `<root>/<对话名>--<会话id>/<内容>--<方式>--<时间>--seq<N>.md`. The
+  directory states which conversation a record belongs to, once; the file names
+  inside carry only what varies.
+- The panel states the execution order and the re-measurement rule, so "my tool
+  threshold did not fire" has a visible answer.
+- **README rewritten around what a reader actually asks**: a one-line definition
+  first, a quick start, the cascade documented as the core design, measured
+  before/after numbers per section instead of estimates, and a 「你可能担心的事」
+  section recording the real concerns — over-aggressive trimming, repeated model
+  spend, prompt-cache invalidation, and the two log corruption incidents. A
+  document that only lists upsides is marketing.
+
+### Added (tests)
+
+- `test/cascade.test.mjs`, `test/turn-shape.test.mjs`, `test/version.test.mjs`,
+  `test/readme.test.mjs` and the consolidated shape checks: 58 tests, all
+  pinned against the packaged `dsh-session` where the behaviour is a log rule.
 
 ## [0.9.0] — 2026-11-13
 

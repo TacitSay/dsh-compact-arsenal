@@ -188,7 +188,7 @@ Prompt 缓存靠前缀匹配工作。压缩改写了前面的内容，其后全�
 - `test/turn-shape.test.mjs`——**在 turn 打开的条件下**验证两种替换形状（这正是当初所有离线检查漏掉的条件）；
 - `test/checkpoint-shape.test.mjs`——用打包的 `dsh-session` 真实写入并校验。
 
-另有 `verify-fix.cjs` 做 24 项源码断言。**58 个测试，全绿。**
+另有 `verify-fix.cjs` 做 24 项源码断言。**60 个测试，全绿。**
 
 ### 「压缩了但我看不出效果」
 
@@ -246,7 +246,7 @@ Prompt 缓存靠前缀匹配工作。压缩改写了前面的内容，其后全�
 ## 开发
 
 ```sh
-node --test test/*.test.mjs     # 58 个测试
+node --test test/*.test.mjs     # 60 个测试
 node test/verify-fix.cjs        # 24 项源码断言
 node test/render-panel.mjs      # 面板渲染
 ```
