@@ -27,7 +27,7 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { summarize, summarizeBatch } from './lib/summarize.js'
+import { summarize, summarizeBatch, summarizeTurns } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
 import { logLine, logRoot } from './lib/log.js'
 import {
@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.12.2'
+export const PACKAGE_VERSION = '0.13.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -134,13 +134,39 @@ export const DEFAULTS = Object.freeze({
      * leave a huge turn barely compressed. A ratio scales with the input.
      */
     summaryRatio: null,
-    maxInputChars: 24000,
-    maxTurnsPerPass: 6,
+    /**
+     * Total transcript characters per model call.
+     *
+     * Measured on a real session: turn transcripts average ~21,600 chars, so a
+     * 24,000 budget fits roughly ONE turn per call — batching then saves almost
+     * nothing. At 96,000 the same 26 turns take 8 calls instead of 26.
+     *
+     * The ceiling is the model's context window: on a 1M-token route (~400K chars
+     * of usable input) 96,000 leaves ample room for the reply and the instruction.
+     * A smaller-window model needs this lowered.
+     */
+    maxInputChars: 96000,
+    /**
+     * The only brake on a pass. A turn-count cap used to live here too, but it
+     * stopped a 180-second budget after 51 seconds — the budget is what a user
+     * actually feels, so a count on top of it only cuts work short.
+     *
+     * Enforced in minutes by the panel (60s minimum): a shorter budget cannot
+     * finish even one batch, so the pass would never make progress.
+     */
     maxPassMs: 180000,
     provider: '',
     model: '',
     prompt: DEFAULT_TURN_PROMPT,
-    maxTokens: 1200,
+    /**
+     * Reply budget for ONE batch, not one turn.
+     *
+     * 1200 was sized for a single summary and would truncate a batch reply
+     * mid-JSON, which `parseSummaries` then rejects wholesale. At three turns per
+     * call and up to ~500 chars each, plus JSON punctuation, 4000 is comfortable;
+     * a batch that needs more simply produces shorter records.
+     */
+    maxTokens: 4000,
   },
   total: {
     enabled: false,
@@ -756,8 +782,10 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   const ratio = Number.isFinite(policy.summaryRatio) && policy.summaryRatio > 0
     ? Math.min(1, policy.summaryRatio)
     : null
-  const maxTurns = Number.isFinite(policy.maxTurnsPerPass) ? policy.maxTurnsPerPass : 6
-  const budgetMs = Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 180000
+  // A pass shorter than a minute cannot finish even one batch on a slow route,
+  // so a tiny value would mean "never make progress". Clamped, not rejected: the
+  // config editor writes whatever the panel sends.
+  const budgetMs = Math.max(60000, Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 180000)
 
   // Oldest first, and never the most recent `keepLast` turns: those are the
   // live working set.
@@ -777,15 +805,48 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   let archived = 0
   const startedAt = Date.now()
 
+  /**
+   * Group turns into batches by transcript size.
+   *
+   * Each batch becomes ONE model call. The grouping is what makes this cheaper
+   * than per-turn calls: a turn's transcript is mostly tool output, but the fixed
+   * cost per request (system prompt, headers, round-trip) is paid once per batch
+   * instead of once per turn.
+   *
+   * A transcript larger than the whole budget gets a batch to itself and is
+   * truncated — that is the only case where content is cut before the model sees
+   * it, and it is why `maxInputChars` is worth raising for very large sessions.
+   */
+  const batches = []
+  let current = []
+  let currentSize = 0
+  for (const interval of eligible) {
+    if (isCondensedMiddle(session, interval)) continue
+    const middle = middleChars(session, interval.middleSeqs)
+    if (middle < minChars) continue
+    const transcript = middleTranscript(session, interval.middleSeqs)
+    if (transcript === '') continue
+
+    const clipped = transcript.length > maxInput ? transcript.slice(0, maxInput) : transcript
+    if (current.length > 0 && currentSize + clipped.length > maxInput) {
+      batches.push(current)
+      current = []
+      currentSize = 0
+    }
+    current.push({ interval, transcript, input: clipped, middle })
+    currentSize += clipped.length
+  }
+  if (current.length > 0) batches.push(current)
+
   void logLine('info', 'turns pass start', {
     intervals: intervals.length,
     eligible: eligible.length,
+    batches: batches.length,
     provider: modelCfg.provider,
     model: modelCfg.model,
   })
 
-  for (const interval of eligible) {
-    if (items >= maxTurns) break
+  for (const batch of batches) {
     signal?.throwIfAborted?.()
     if (stillOpen !== undefined && !stillOpen()) {
       void logLine('warn', 'turns aborted: turn closed', { items })
@@ -793,96 +854,84 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     }
     if (Date.now() - startedAt > budgetMs) {
       lastFailure = `turns: 本轮处理了 ${items} 轮后到达 ${budgetMs}ms 预算`
-      void logLine('warn', 'turns budget reached', { items, remaining: eligible.length - items })
+      void logLine('warn', 'turns budget reached', { items, remaining: batches.length })
       break
     }
-    // Already condensed: the middle is our own checkpoint.
-    if (isCondensedMiddle(session, interval)) continue
 
-    const middle = middleChars(session, interval.middleSeqs)
-    if (middle < minChars) continue
-
-    const transcript = middleTranscript(session, interval.middleSeqs)
-    if (transcript === '') continue
-    const input = transcript.length > maxInput ? transcript.slice(0, maxInput) : transcript
-
-    let summary = ''
+    let summaries
     try {
-      summary = await summarize(ctx, modelCfg, input, signal)
+      summaries = await summarizeTurns(
+        ctx,
+        { ...modelCfg, summaryRatio: ratio },
+        batch.map((item) => item.input),
+        signal,
+      )
     } catch (error) {
-      failed += 1
-      lastFailure = `turn ${interval.userSeq}: ${String(error?.message ?? error)}`
-      if (failed <= 3) {
-        void logLine('error', 'turns summarize failed', {
-          seq: interval.userSeq,
-          error: String(error?.message ?? error),
-        })
-      }
-      continue
-    }
-    summary = summary.trim()
-    if (summary === '') {
-      failed += 1
-      lastFailure = `turn ${interval.userSeq}: 模型返回空摘要`
-      continue
-    }
-    // The cap is a RATIO of the middle, not a fixed length: a 3000-char turn and
-    // a 300,000-char turn should not be held to the same budget. Empty means no
-    // limit — the model's own sense of "concise" is allowed to decide.
-    if (Number.isFinite(ratio) && ratio > 0) {
-      const cap = Math.max(200, Math.floor(middle * ratio))
-      if ([...summary].length > cap) summary = [...summary].slice(0, cap).join('')
-    }
-
-    const lastEvent = session.eventAt(interval.middleSeqs.at(-1))
-    const turn = Number.isFinite(lastEvent?.data?.turn) ? lastEvent.data.turn : currentTurn
-    try {
-      // The replacement MUST cite every shadowed node, and `assistant/message`
-      // is forbidden from citing anything — the two rules are mutually
-      // exclusive, so an assistant replacement is impossible for a multi-node
-      // span. A `user/message` may cite, which makes it the only legal carrier.
-      //
-      // The role is therefore wrong on paper (the text is the model's work, not
-      // the user's words), so the marker prefix has to carry that distinction
-      // instead: `TURN_MARKER` is assertable and the panel/archive both keep the
-      // original text.
-      session.append('user/message', {
-        id: `compact-arsenal-turn-${interval.userSeq}-${Date.now()}`,
-        role: 'user',
-        source: { kind: 'user' },
-        content: [{ type: 'text', text: frameSummary(summary) }],
-      }, {
-        surfaceOp: { op: 'replace', startSeq: interval.middleSeqs[0], endSeq: interval.middleSeqs.at(-1) },
-        sourceEventSeqs: interval.middleSeqs,
-      })
-    } catch (error) {
-      failed += 1
-      lastFailure = `turn ${interval.userSeq}: ${String(error?.message ?? error)}`
-      void logLine('error', 'turns append rejected', {
-        seq: interval.userSeq,
+      failed += batch.length
+      lastFailure = `turns 批次（${batch.length} 轮）: ${String(error?.message ?? error)}`
+      void logLine('error', 'turns batch failed', {
+        turns: batch.length,
         error: String(error?.message ?? error),
       })
       continue
     }
 
-    items += 1
-    chars += Math.max(0, middle - summary.length)
+    for (const [i, entry] of batch.entries()) {
+      if (stillOpen !== undefined && !stillOpen()) break
+      let summary = String(summaries[i] ?? '').trim()
+      // A blank slot means the model skipped this turn. Leave it alone — the next
+      // pass will offer it again, which is cheaper than failing the batch.
+      if (summary === '') continue
 
-    if (policy.archiveEnabled !== false) {
-      const path = await archiveRewrite({
-        root: archive.root,
-        sessionId: session.id,
-        sessionTitle: sessionTitleOf(session),
-        kind: 'turn',
-        method: 'model',
-        seq: interval.userSeq,
-        original: transcript,
-        replacement: summary,
-        summary,
-      })
-      if (path !== undefined) {
-        archived += 1
-        archive.lastPath = path
+      if (ratio !== null) {
+        const cap = Math.max(200, Math.floor(entry.middle * ratio))
+        if ([...summary].length > cap) summary = [...summary].slice(0, cap).join('')
+      }
+
+      try {
+        // The replacement MUST cite every shadowed node, and `assistant/message`
+        // is forbidden from citing anything — the two rules are mutually
+        // exclusive, so a `user/message` is the only legal carrier for a
+        // multi-node span. The marker prefix is what distinguishes it from the
+        // user's own words in the log and on the panel.
+        session.append('user/message', {
+          id: `compact-arsenal-turn-${entry.interval.userSeq}-${Date.now()}`,
+          role: 'user',
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: frameSummary(summary) }],
+        }, {
+          surfaceOp: { op: 'replace', startSeq: entry.interval.middleSeqs[0], endSeq: entry.interval.middleSeqs.at(-1) },
+          sourceEventSeqs: entry.interval.middleSeqs,
+        })
+      } catch (error) {
+        failed += 1
+        lastFailure = `turn ${entry.interval.userSeq}: ${String(error?.message ?? error)}`
+        void logLine('error', 'turns append rejected', {
+          seq: entry.interval.userSeq,
+          error: String(error?.message ?? error),
+        })
+        continue
+      }
+
+      items += 1
+      chars += Math.max(0, entry.middle - summary.length)
+
+      if (policy.archiveEnabled !== false) {
+        const path = await archiveRewrite({
+          root: archive.root,
+          sessionId: session.id,
+          sessionTitle: sessionTitleOf(session),
+          kind: 'turn',
+          method: 'model',
+          seq: entry.interval.userSeq,
+          original: entry.transcript,
+          replacement: summary,
+          summary,
+        })
+        if (path !== undefined) {
+          archived += 1
+          archive.lastPath = path
+        }
       }
     }
   }

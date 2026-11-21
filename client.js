@@ -332,7 +332,7 @@ window.__ModuleLoader__.load({
       enabled: true,
       archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 24000, maxTurnsPerPass: 6, provider: '', model: '', prompt: '', maxTokens: 1200 },
+      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 96000, maxPassMs: 180000, provider: '', model: '', prompt: '', maxTokens: 4000 },
       total: { enabled: false, pressureRatio: 0.85, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
       tools: { enabled: false, pressureRatio: 0.6, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
               },
             }),
           ]),
-          h(NumberField, { key: 't', label: '单轮最多', value: config.turns.maxTurnsPerPass, min: 1, suffix: '轮', onChange: (v) => setSection('turns', 'maxTurnsPerPass', v) }),
+          h(NumberField, { key: 't', label: '时间预算', value: Math.round((config.turns.maxPassMs ?? 180000) / 1000), min: 60, step: 30, suffix: '秒', onChange: (v) => setSection('turns', 'maxPassMs', Math.max(60, v) * 1000) }),
         ]),
         h(ModelPicker, {
           key: 'mp',
@@ -587,7 +587,16 @@ window.__ModuleLoader__.load({
             turns: { ...cfg.turns, provider: value.provider || '', model: value.model || '' },
           })),
         }),
-        h(Field, { key: 'p', label: '压缩提示词', wide: true, hint: '只描述这一轮的「做法」；用户的原话不在输入里。' },
+        h(Field, { key: 't', label: '输出上限', hint: '单次批量调用的回复 token 数' },
+          h('input', {
+            type: 'number', value: String(config.turns.maxTokens ?? 4000), min: 512, step: 512,
+            onChange: (event) => {
+              const next = Number(event.target.value)
+              setSection('turns', 'maxTokens', Number.isFinite(next) ? next : 4000)
+            },
+            style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
+          })),
+        h(Field, { key: 'p', label: '压缩提示词', wide: true, hint: '描述这一轮「做法」的要点；用户原话不在输入里。' },
           h('textarea', {
             value: config.turns.prompt || '', rows: 4,
             onChange: (event) => setSection('turns', 'prompt', event.target.value),

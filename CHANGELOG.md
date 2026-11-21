@@ -16,6 +16,45 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.13.0] — 2026-11-21
+
+### Changed
+
+- **Turns are condensed in batches: one model call per batch, not per turn.**
+  A measured run compressed six turns in 51.7s across six separate calls. Most
+  of that is per-request overhead — system prompt, headers, round-trip — so
+  batching pays it once. Transcripts are grouped until the next would exceed
+  `maxInputChars`, then sent as one numbered request answered with a JSON array.
+
+- **`maxInputChars` raised 24,000 → 96,000.** The first measurement made the
+  batch pointless: turn transcripts average ~21,600 chars on a real session, so a
+  24,000 budget fit roughly one turn per call. At 96,000 the same 26 turns need 8
+  calls instead of 26. The ceiling is the model's context window; a smaller-window
+  model needs this lowered.
+
+- **`maxTokens` raised 1,200 → 4,000.** The reply budget now covers a whole batch.
+  At 1,200 a three-turn reply could be truncated mid-JSON, which fails parsing and
+  loses every summary in that batch at once.
+
+- **`maxTurnsPerPass` removed.** It stopped a 180-second budget after 51 seconds.
+  The time budget is what a user actually feels; a count on top of it only cuts
+  work short. `maxPassMs` is now exposed in the panel with a 60-second floor —
+  below that a slow route cannot finish even one batch, so a pass would never make
+  progress.
+
+### Robustness
+
+- A blank entry in the model's JSON array means "leave this turn alone": the turn
+  is skipped and offered again next pass, rather than failing the whole batch.
+- One failed batch is logged and the loop continues to the next, so a single bad
+  request does not discard the rest of the pass.
+
+### Added
+
+- `test/batch-turns.test.mjs` and `test/summary-ratio.test.mjs`: pin the batching
+  shape, the removed turn cap, the 60-second floor, blank-slot tolerance, and the
+  ratio semantics.
+
 ## [0.12.2] — 2026-11-21
 
 ### Changed
