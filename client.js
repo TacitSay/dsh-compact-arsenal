@@ -538,12 +538,9 @@ window.__ModuleLoader__.load({
       const turns = h(Section, {
         key: 'turns',
         title: '轮次压缩',
-        subtitle: '把每一轮模型做了什么压成一段，用户的原话保持不动',
         enabled: config.turns.enabled,
         onToggle: (value) => setSection('turns', 'enabled', value),
       }, [
-        h('p', { key: 'note', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 } },
-          '取「用户说了一句话」到「下一句用户的话」之间的全部内容——思考、工具调用、工具输出、我的回复——交给模型压成一段。用户自己的话永远不参与压缩，所以你的要求不会被改写。'),
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
           h(NumberField, { key: 'pr', label: '触发阈值', value: config.turns.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('turns', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不动最近', value: config.turns.keepLast, min: 0, suffix: '轮', onChange: (v) => setSection('turns', 'keepLast', v) }),
@@ -551,7 +548,7 @@ window.__ModuleLoader__.load({
           // Ratio, not a fixed length: a 3,000-char turn and a 300,000-char turn
           // should not share one budget. Blank means no limit at all.
           h('label', { key: 'r', style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 130px', minWidth: 0 } }, [
-            h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, '摘要占原文'),
+            h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, '占原文'),
             h('input', {
               key: 'i',
               type: 'number',

@@ -16,6 +16,15 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.12.2] — 2026-11-21
+
+### Changed
+
+- **Removed the explanatory prose from the 轮次压缩 section.** The subtitle and
+  the two-paragraph note described what the controls below them already make
+  clear, and on a narrow panel they pushed the actual settings below the fold.
+  The section is now its title, its switch, and its parameters.
+
 ## [0.12.1] — 2026-11-21
 
 ### Changed

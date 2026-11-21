@@ -108,6 +108,9 @@ const checks = {
   'no pressure row': !all.includes('上下文压力：真实'),
   'no safety footer': !all.includes('安全边界'),
   'no per-run counters': !all.includes('本次进程已执行'),
+  // The turn section explains itself through its controls; the two paragraphs
+  // that used to sit above them repeated what the labels already say.
+  'no turn section prose': !all.includes('把每一轮模型做了什么') && !all.includes('交给模型压成一段'),
 }
 console.log('')
 for (const [name, ok] of Object.entries(checks)) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`)
