@@ -332,7 +332,7 @@ window.__ModuleLoader__.load({
       enabled: true,
       archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, maxSummaryChars: 2000, maxInputChars: 24000, maxTurnsPerPass: 6, provider: '', model: '', prompt: '', maxTokens: 1200 },
+      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 24000, maxTurnsPerPass: 6, provider: '', model: '', prompt: '', maxTokens: 1200 },
       total: { enabled: false, pressureRatio: 0.85, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
       tools: { enabled: false, pressureRatio: 0.6, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
@@ -548,7 +548,37 @@ window.__ModuleLoader__.load({
           h(NumberField, { key: 'pr', label: '触发阈值', value: config.turns.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('turns', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
           h(NumberField, { key: 'k', label: '不动最近', value: config.turns.keepLast, min: 0, suffix: '轮', onChange: (v) => setSection('turns', 'keepLast', v) }),
           h(NumberField, { key: 'm', label: '最小体积', value: config.turns.minChars, min: 0, step: 500, suffix: '字符', onChange: (v) => setSection('turns', 'minChars', v) }),
-          h(NumberField, { key: 's', label: '摘要上限', value: config.turns.maxSummaryChars, min: 200, step: 200, suffix: '字符', onChange: (v) => setSection('turns', 'maxSummaryChars', v) }),
+          // Ratio, not a fixed length: a 3,000-char turn and a 300,000-char turn
+          // should not share one budget. Blank means no limit at all.
+          h('label', { key: 'r', style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 130px', minWidth: 0 } }, [
+            h('span', { key: 'l', style: { fontSize: 11, color: MUTED } }, '摘要占原文'),
+            h('input', {
+              key: 'i',
+              type: 'number',
+              min: 0, max: 100, step: 1,
+              value: config.turns.summaryRatio === null || config.turns.summaryRatio === undefined
+                ? ''
+                : String(Math.round(config.turns.summaryRatio * 100)),
+              placeholder: '留空 = 不限',
+              onChange: (event) => {
+                const raw = event.target.value.trim()
+                if (raw === '') {
+                  patch((cfg) => ({ ...cfg, turns: { ...cfg.turns, summaryRatio: null } }))
+                  return
+                }
+                const pct = Number(raw)
+                if (!Number.isFinite(pct)) return
+                const next = Math.min(100, Math.max(0, pct)) / 100
+                setSection('turns', 'summaryRatio', next)
+              },
+              style: {
+                width: '100%', minWidth: 0, boxSizing: 'border-box',
+                padding: '5px 8px', borderRadius: 8, fontSize: 12,
+                border: `1px solid ${LINE}`, background: 'rgba(127,127,127,0.08)',
+                color: 'inherit', fontVariantNumeric: 'tabular-nums',
+              },
+            }),
+          ]),
           h(NumberField, { key: 't', label: '单轮最多', value: config.turns.maxTurnsPerPass, min: 1, suffix: '轮', onChange: (v) => setSection('turns', 'maxTurnsPerPass', v) }),
         ]),
         h(ModelPicker, {

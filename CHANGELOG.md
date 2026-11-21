@@ -16,6 +16,28 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.12.1] — 2026-11-21
+
+### Changed
+
+- **The summary limit is a ratio, and empty means unlimited.** A fixed 2000-char
+  cap is wrong at both ends: a 3,000-char turn was cut mid-sentence, while a
+  362,000-char turn (measured on a real session) was forced to 99.4% compression
+  with no guarantee the important details survived. `summaryRatio` now caps the
+  summary at a fraction of the middle it replaces, with a 200-character floor so
+  a tiny turn cannot produce an unusable stub.
+
+  **The shipped default is blank — no limit.** The prompt already asks for a
+  condensed record; letting the model decide how long that is beats truncating
+  its answer at an arbitrary number. Set a ratio only when a predictable cost
+  matters more than fidelity.
+
+### Added
+
+- `test/summary-ratio.test.mjs`: pins that null and zero both mean unlimited,
+  that the cap scales with the middle, and that the floor prevents a
+  uselessly short result.
+
 ## [0.12.0] — 2026-11-21
 
 ### Added

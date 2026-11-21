@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.12.0'
+export const PACKAGE_VERSION = '0.12.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -126,8 +126,14 @@ export const DEFAULTS = Object.freeze({
     minChars: 2000,
     /** Never condense a turn whose instruction is more recent than this. */
     keepLast: 2,
-    /** Upper bound on one summary, so a pass has a predictable cost. */
-    maxSummaryChars: 2000,
+    /**
+     * How much of the middle the summary may keep, as a ratio.
+     *
+     * Empty means unlimited — the prompt already asks for a condensed record, and
+     * a fixed character cap would either truncate a good summary mid-sentence or
+     * leave a huge turn barely compressed. A ratio scales with the input.
+     */
+    summaryRatio: null,
     maxInputChars: 24000,
     maxTurnsPerPass: 6,
     maxPassMs: 180000,
@@ -746,7 +752,10 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   const keepLast = Number.isFinite(policy.keepLast) ? Math.max(0, Math.trunc(policy.keepLast)) : 2
   const minChars = Number.isFinite(policy.minChars) ? policy.minChars : 2000
   const maxInput = Number.isFinite(policy.maxInputChars) ? policy.maxInputChars : 24000
-  const maxSummary = Number.isFinite(policy.maxSummaryChars) ? policy.maxSummaryChars : 2000
+  // Ratio of the middle the summary may occupy. Empty / 0 means unlimited.
+  const ratio = Number.isFinite(policy.summaryRatio) && policy.summaryRatio > 0
+    ? Math.min(1, policy.summaryRatio)
+    : null
   const maxTurns = Number.isFinite(policy.maxTurnsPerPass) ? policy.maxTurnsPerPass : 6
   const budgetMs = Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 180000
 
@@ -817,7 +826,13 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
       lastFailure = `turn ${interval.userSeq}: 模型返回空摘要`
       continue
     }
-    if ([...summary].length > maxSummary) summary = [...summary].slice(0, maxSummary).join('')
+    // The cap is a RATIO of the middle, not a fixed length: a 3000-char turn and
+    // a 300,000-char turn should not be held to the same budget. Empty means no
+    // limit — the model's own sense of "concise" is allowed to decide.
+    if (Number.isFinite(ratio) && ratio > 0) {
+      const cap = Math.max(200, Math.floor(middle * ratio))
+      if ([...summary].length > cap) summary = [...summary].slice(0, cap).join('')
+    }
 
     const lastEvent = session.eventAt(interval.middleSeqs.at(-1))
     const turn = Number.isFinite(lastEvent?.data?.turn) ? lastEvent.data.turn : currentTurn
