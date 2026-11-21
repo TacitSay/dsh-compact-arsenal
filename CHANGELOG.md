@@ -16,6 +16,42 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.11.1] — 2026-11-21
+
+### Fixed
+
+- **A large session never compressed at all.** One real session held 760 tool
+  fragments totalling 1.09M chars. With `tools.mode: model` every one was queued
+  for summarization, which needs roughly 91 model calls, while the 90-second pass
+  budget covers about 28. Every turn hit the budget, reported `items=0`,
+  `failed=95`, and started over — so the backlog could never shrink.
+
+  Three changes address the different halves of that:
+
+  - **Model mode is bounded by time, not by an item count.** `maxItems` was 12,
+    covering 1.6% of the backlog per turn. The wall-clock budget is the limit a
+    user actually feels; the item cap is kept only for mechanical mode, where an
+    item costs nothing and an unbounded loop would be the real risk.
+  - **Batches fill by characters** (up to 24 items / 12000 chars) instead of a
+    fixed 8, cutting the call count for a 760-fragment backlog from about 95 to
+    about 93 at the same cap — and letting a larger cap pay off properly.
+  - **A budget stop is progress, not failure.** It used to be recorded as a
+    failure message, which made the panel read "failed 95 times, 0 compressed"
+    after a pass that may well have compressed plenty. It now reports how many
+    items landed and how many remain.
+
+### Changed
+
+- The live config for this machine now runs `tools.mode: truncate`: tool output
+  is repetitive (logs, listings, command dumps) and head/tail trimming clears it
+  at zero model cost. The model pass should only see what trimming leaves.
+
+### Added
+
+- `test/throughput.test.mjs`: pins the four properties above so a future edit
+  cannot quietly restore the fixed item cap or turn a budget stop back into a
+  failure count.
+
 ## [0.11.0] — 2026-11-14
 
 Consolidates everything after the published `0.9.0`. Those intermediate numbers

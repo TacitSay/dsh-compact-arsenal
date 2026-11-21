@@ -36,7 +36,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.11.0'
+export const PACKAGE_VERSION = '0.11.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -358,6 +358,43 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
    * Read from the live `llm` registry rather than a stored copy: a route appears
    * here exactly when the Harness could actually route a request to it.
    */
+  /**
+   * TEMPORARY experiment route — removed after the comparison run.
+   *
+   * Runs the plugin's own `summarize()` against a caller-supplied prompt, so the
+   * comparison measures the prompt rather than a hand-built HTTP client.
+   */
+  route(`${API_PREFIX}/experiment`, async (req, res) => {
+    if (req.method !== 'POST') return send(res, 405, { error: 'method-not-allowed' })
+    let body = ''
+    for await (const chunk of req) body += chunk
+    let payload
+    try {
+      payload = JSON.parse(body)
+    } catch {
+      return send(res, 400, { error: 'invalid-json' })
+    }
+    const llm = ctx.get('llm')
+    if (llm === undefined) return send(res, 503, { error: 'llm-unavailable' })
+
+    const provider = payload.provider || 'ark-plan'
+    const model = payload.model || 'deepseek-v4-1-flash-economy-261017'
+    const started = Date.now()
+    try {
+      // Import here so the experiment cannot affect normal load.
+      const { summarize } = await import('./lib/summarize.js')
+      const reply = await summarize(
+        ctx,
+        { provider, model, prompt: payload.system, maxTokens: payload.maxTokens ?? 900 },
+        payload.user,
+        undefined,
+      )
+      send(res, 200, { ok: true, reply, elapsedMs: Date.now() - started })
+    } catch (error) {
+      send(res, 500, { ok: false, error: String(error?.message ?? error), elapsedMs: Date.now() - started })
+    }
+  })
+
   route(`${API_PREFIX}/models`, async (req, res) => {
     if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })
     const llm = ctx.get('llm')
@@ -1144,7 +1181,16 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
     session: session.id,
     title: sessionTitleOf(session),
   })
-  while (index < candidates.length && items < maxItems && chars < maxChars) {
+  // The model path is bounded by TIME, not by a fixed item count.
+  //
+  // A long session can hold 700+ fragments, which needs ~120 model calls at
+  // eight per batch. `maxItems` was 12, so a pass covered 1.6% of the backlog
+  // and the next turn started over — the session never actually shrank. The
+  // wall-clock budget is the honest limit (it is what the user feels), so the
+  // item cap is lifted for model mode and left in place for mechanical mode,
+  // where each item costs nothing and an unbounded loop would be the risk.
+  const itemCap = policy.mode === 'model' ? Number.POSITIVE_INFINITY : maxItems
+  while (index < candidates.length && items < itemCap && chars < maxChars) {
     // The step may have been cancelled while a model batch was in flight; never
     // write into a session whose turn has been torn down.
     signal?.throwIfAborted?.()
@@ -1153,12 +1199,26 @@ async function compressSection(ctx, session, policy, kind, seqs, signal, archive
       return { items, chars, failed, archived }
     }
     if (Date.now() - startedAt > budgetMs) {
-      lastFailure = `${kind}: pass stopped after ${budgetMs}ms budget`
+      // A budget stop is not a failure: the fragments processed so far are
+      // already durable. Reporting it as `failed` would tell the user nothing
+      // was compressed when in fact most of it was.
+      lastFailure = `${kind}: 本轮处理了 ${items} 条后到达 ${budgetMs}ms 时间预算，剩余 ${candidates.length - index} 条留到下一轮`
+      void logLine('warn', 'pass budget reached', {
+        kind,
+        items,
+        chars,
+        remaining: candidates.length - index,
+        budgetMs,
+      })
       break
     }
     const batch = []
     let batchSize = 0
-    while (index < candidates.length && batch.length < 8 && batchSize < batchChars) {
+    // Batch by CHARACTERS, not by a fixed count. The old limit of 8 made a
+    // 760-fragment backlog take 95 calls; the real constraint is the 12000-char
+    // prompt cap, so filling to that cap is what keeps the call count sane.
+    // A small fragment count still bounds the JSON reply the model must emit.
+    while (index < candidates.length && batch.length < 24 && batchSize < batchChars) {
       batch.push(candidates[index])
       batchSize += candidates[index].text.length
       index += 1
