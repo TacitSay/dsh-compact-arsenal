@@ -16,6 +16,37 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.11.2] — 2026-11-21
+
+### Changed
+
+- **A collapsed fragment is now one character instead of a sentence.** Short
+  fragments used to become `[已省略 213 字，原文见会话日志]` — 19 characters of new
+  text to save 194. Multiplied across hundreds of fragments that placeholder is
+  itself a noticeable share of what the model reads, and it tells the reader
+  nothing the record header does not already say. They now collapse to `·`.
+
+### Why not empty
+
+An empty replacement was the obvious next step and is the wrong one. The log
+accepts `content: []`, but the DeepSeek adapter converts text blocks with
+`block.text ? [{type:'text',…}] : []`, so empty text yields a `tool_result` with
+no parts — a provider-side rejection. That is the same class of failure that
+corrupted sessions twice in this plugin's history (a replacement the log took but
+a later reader refused), so the marker is one character rather than none.
+
+### Fixed
+
+- `alreadyRewritten` matched markers by substring, which cannot work for a
+  one-character marker: it would flag any prose containing `·`. A collapsed
+  fragment is now recognised by whole-string equality, so it is still skipped on
+  the next pass while ordinary content is not.
+
+### Added
+
+- `test/short-marker.test.mjs`: pins the one-character collapse, the non-blank
+  requirement, and that `·` inside normal text is not mistaken for a marker.
+
 ## [0.11.1] — 2026-11-21
 
 ### Fixed

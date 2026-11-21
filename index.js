@@ -19,6 +19,7 @@ import {
   MODEL_REASONING_MARKER,
   MODEL_TOOL_MARKER,
   REASONING_MARKER,
+  SHORT_MARKER,
   TOOL_MARKER,
   alreadyRewritten,
 } from './lib/policy.js'
@@ -36,7 +37,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.11.1'
+export const PACKAGE_VERSION = '0.11.2'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -1323,8 +1324,16 @@ function buildReplacement(text, policy, marker, summary) {
     const keptTail = tail > 0 ? points.slice(Math.max(0, points.length - tail)).join('') : ''
     return `${keptHead}\n\n${marker}\n${summary}\n${marker}\n\n${keptTail}`
   }
-  // Mechanical: short fragments are dropped outright, long ones keep head/tail.
-  if (points.length <= head + tail + marker.length) return `[已省略 ${points.length} 字，原文见会话日志]`
+  // Mechanical: short fragments collapse to a minimal marker, long ones keep
+  // head/tail.
+  //
+  // Emphatically NOT an empty string or an empty content array. An empty
+  // `tool/result` content is accepted by the log but reaches the provider as a
+  // `tool_result` block with no parts, because the DeepSeek adapter drops empty
+  // text blocks (`block.text ? [...] : []`) — and a provider-side rejection is
+  // exactly the failure mode that has corrupted sessions twice before. One
+  // character of marker text keeps the block well-formed at negligible cost.
+  if (points.length <= head + tail + marker.length) return SHORT_MARKER
   return `${points.slice(0, head).join('')}\n\n${marker}\n\n${points.slice(points.length - tail).join('')}`
 }
 
