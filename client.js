@@ -332,9 +332,10 @@ window.__ModuleLoader__.load({
       enabled: true,
       archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      total: { enabled: false, pressureRatio: 0.8, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
+      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, maxSummaryChars: 2000, maxInputChars: 24000, maxTurnsPerPass: 6, provider: '', model: '', prompt: '', maxTokens: 1200 },
+      total: { enabled: false, pressureRatio: 0.85, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
-      tools: { enabled: false, pressureRatio: 0.75, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
+      tools: { enabled: false, pressureRatio: 0.6, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
     }
 
     /**
@@ -534,63 +535,37 @@ window.__ModuleLoader__.load({
           totalNotice),
       ])
 
-      const reasoning = h(Section, {
-        key: 'reasoning',
-        title: '思考压缩',
-        subtitle: '改写旧轮次助手消息里的推理笔记',
-        enabled: config.reasoning.enabled,
-        onToggle: (value) => setSection('reasoning', 'enabled', value),
+      const turns = h(Section, {
+        key: 'turns',
+        title: '轮次压缩',
+        subtitle: '把每一轮模型做了什么压成一段，用户的原话保持不动',
+        enabled: config.turns.enabled,
+        onToggle: (value) => setSection('turns', 'enabled', value),
       }, [
-        h('div', { key: 'methods', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
-          h(MethodCard, {
-            key: 'truncate',
-            title: '机械截断',
-            description: '保留开头与结尾，剪掉中段。不调用模型。',
-            selected: config.reasoning.mode === 'truncate',
-            onSelect: () => setSection('reasoning', 'mode', 'truncate'),
-          }),
-          h(MethodCard, {
-            key: 'clear',
-            title: '整块清除',
-            description: '直接删掉旧思考。最省空间，丢失最多。',
-            selected: config.reasoning.mode === 'clear',
-            onSelect: () => setSection('reasoning', 'mode', 'clear'),
-          }),
-          h(MethodCard, {
-            key: 'model',
-            title: '模型压缩',
-            description: '用模型把剪掉的中段改写成要点。会调用模型。',
-            selected: config.reasoning.mode === 'model',
-            onSelect: () => setSection('reasoning', 'mode', 'model'),
-          }),
-        ]),
-        config.reasoning.mode === 'model'
-          ? h(ModelPicker, {
-            key: 'mp',
-            model: config.reasoning.model,
-            catalog,
-            onChange: (value) => setSection('reasoning', 'model', value),
-          })
-          : null,
-        config.reasoning.mode === 'model'
-          ? h(PromptFields, {
-            key: 'pf',
-            model: config.reasoning.model,
-            onChange: (value) => setSection('reasoning', 'model', value),
-          })
-          : null,
+        h('p', { key: 'note', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 } },
+          '取「用户说了一句话」到「下一句用户的话」之间的全部内容——思考、工具调用、工具输出、我的回复——交给模型压成一段。用户自己的话永远不参与压缩，所以你的要求不会被改写。'),
         h('div', { key: 'params', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, [
-          h(NumberField, { key: 'pr', label: '触发阈值', value: config.reasoning.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('reasoning', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
-          h(NumberField, { key: 'k', label: '不改动最近', value: config.reasoning.keepLast, min: 0, suffix: '条', onChange: (v) => setSection('reasoning', 'keepLast', v) }),
-          h(NumberField, { key: 'm', label: '总量下限', value: config.reasoning.minTotalChars, min: 0, step: 1000, suffix: '字符', onChange: (v) => setSection('reasoning', 'minTotalChars', v) }),
-          h(NumberField, { key: 'f', label: '单项下限', value: config.reasoning.minChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'minChars', v) }),
-          config.reasoning.mode === 'model'
-            ? null
-            : h(NumberField, { key: 'h', label: '保留开头', value: config.reasoning.headChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'headChars', v) }),
-          config.reasoning.mode === 'model'
-            ? null
-            : h(NumberField, { key: 't', label: '保留结尾', value: config.reasoning.tailChars, min: 0, step: 50, suffix: '字符', onChange: (v) => setSection('reasoning', 'tailChars', v) }),
+          h(NumberField, { key: 'pr', label: '触发阈值', value: config.turns.pressureRatio, min: 0, step: 0.05, onChange: (v) => setSection('turns', 'pressureRatio', Math.min(1, Math.max(0, v))) }),
+          h(NumberField, { key: 'k', label: '不动最近', value: config.turns.keepLast, min: 0, suffix: '轮', onChange: (v) => setSection('turns', 'keepLast', v) }),
+          h(NumberField, { key: 'm', label: '最小体积', value: config.turns.minChars, min: 0, step: 500, suffix: '字符', onChange: (v) => setSection('turns', 'minChars', v) }),
+          h(NumberField, { key: 's', label: '摘要上限', value: config.turns.maxSummaryChars, min: 200, step: 200, suffix: '字符', onChange: (v) => setSection('turns', 'maxSummaryChars', v) }),
+          h(NumberField, { key: 't', label: '单轮最多', value: config.turns.maxTurnsPerPass, min: 1, suffix: '轮', onChange: (v) => setSection('turns', 'maxTurnsPerPass', v) }),
         ]),
+        h(ModelPicker, {
+          key: 'mp',
+          model: { provider: config.turns.provider, model: config.turns.model },
+          catalog,
+          onChange: (value) => patch((cfg) => ({
+            ...cfg,
+            turns: { ...cfg.turns, provider: value.provider || '', model: value.model || '' },
+          })),
+        }),
+        h(Field, { key: 'p', label: '压缩提示词', wide: true, hint: '只描述这一轮的「做法」；用户的原话不在输入里。' },
+          h('textarea', {
+            value: config.turns.prompt || '', rows: 4,
+            onChange: (event) => setSection('turns', 'prompt', event.target.value),
+            style: { ...controlStyle, resize: 'vertical', lineHeight: 1.6 },
+          })),
       ])
 
       const tools = h(Section, {
@@ -655,7 +630,7 @@ window.__ModuleLoader__.load({
           pointerEvents: config.enabled ? 'auto' : 'none',
           transition: 'opacity 120ms ease',
         },
-      }, [total, reasoning, tools])
+      }, [total, turns, tools])
 
       /**
        * State the order out loud.

@@ -98,7 +98,11 @@ const checks = {
   'panel rendered with content': nodeCount > 20,
   'title present': all.includes('上下文压缩'),
   'retention card present': all.includes('压缩留存'),
-  'three sections present': all.includes('总压缩') && all.includes('思考压缩') && all.includes('工具输出压缩'),
+  // Thinking compression is retired: turn compression condenses the reasoning
+  // together with the tool calls around it, so a separate section would be a
+  // control that changes nothing.
+  'three sections present': all.includes('总压缩') && all.includes('轮次压缩') && all.includes('工具输出压缩'),
+  'no retired reasoning section': !all.includes('思考压缩'),
   'cascade order stated': all.includes('工具输出') && all.includes('重新测量'),
   'no leftover subtitle': !all.includes('开关即生效'),
   'no pressure row': !all.includes('上下文压力：真实'),

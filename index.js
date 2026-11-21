@@ -30,6 +30,13 @@ import { join } from 'node:path'
 import { summarize, summarizeBatch } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
 import { logLine, logRoot } from './lib/log.js'
+import {
+  findTurnIntervals,
+  frameSummary,
+  isCondensedMiddle,
+  middleChars,
+  middleTranscript,
+} from './lib/turns.js'
 
 export const name = 'compact-arsenal'
 
@@ -37,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.11.2'
+export const PACKAGE_VERSION = '0.12.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -82,6 +89,22 @@ const DEFAULT_MODEL_PROMPT = '保留文件名、命令、报错原文、关键�
 /** Prompt used by the total pass when the user wrote none. */
 const DEFAULT_TOTAL_PROMPT = '把这段对话压缩成一份结构化的中文检查点，按 ## 标题分节：用户目标与偏好、涉及的文件与命令、报错与修法、已完成与待办、下一步。保留文件名、命令、报错原文与关键数值，用简短条目，不要评论，不要提及压缩本身。'
 
+/**
+ * Prompt for condensing one turn's middle.
+ *
+ * The middle is what the model did after the user asked something: the commands
+ * it ran, the output it saw, the edits it made, the conclusion it reached. The
+ * instruction is NOT part of the input — it is preserved separately — so this
+ * prompt only has to describe the work.
+ */
+const DEFAULT_TURN_PROMPT = `下面是一轮对话中「模型做了什么」的完整记录，包含思考、工具调用和返回结果。
+请把它压缩成一段简洁的中文记录，要求：
+- 保留执行过的命令与关键参数、文件路径、报错原文、关键数值；
+- 说明最终结果（成功/失败）与得出的结论；
+- 若中途有被推翻的方案，只记最终采用的；
+- 用紧凑的要点式叙述，不要评论，不要提及压缩本身。
+只输出压缩后的内容本身，不要加标题或前缀。`
+
 /** Defaults mirror the README table. */
 export const DEFAULTS = Object.freeze({
   enabled: true,
@@ -89,9 +112,33 @@ export const DEFAULTS = Object.freeze({
   archiveDir: '',
   /** Whether rewrite records are written at all; off means nothing touches disk. */
   archiveEnabled: true,
+  /**
+   * Turn-interval compression: the primary feature.
+   *
+   * Condenses everything the model wrote between one user instruction and the
+   * next into a single block. The instruction itself is never touched, so no
+   * requirement can be paraphrased away.
+   */
+  turns: {
+    enabled: false,
+    pressureRatio: 0.7,
+    /** Minimum middle size before a turn is worth condensing. */
+    minChars: 2000,
+    /** Never condense a turn whose instruction is more recent than this. */
+    keepLast: 2,
+    /** Upper bound on one summary, so a pass has a predictable cost. */
+    maxSummaryChars: 2000,
+    maxInputChars: 24000,
+    maxTurnsPerPass: 6,
+    maxPassMs: 180000,
+    provider: '',
+    model: '',
+    prompt: DEFAULT_TURN_PROMPT,
+    maxTokens: 1200,
+  },
   total: {
     enabled: false,
-    pressureRatio: 0.8,
+    pressureRatio: 0.85,
     thresholdRatio: 0.8,
     retainRatio: 0.16,
     maxTokens: 65536,
@@ -101,6 +148,14 @@ export const DEFAULTS = Object.freeze({
     model: '',
     prompt: DEFAULT_TOTAL_PROMPT,
   },
+  /**
+   * Thinking-fragment compression: retired.
+   *
+   * Turn compression subsumes it — the reasoning inside a turn is condensed with
+   * the rest of the middle, where it is seen in context instead of in isolation.
+   * Kept in the config so existing settings are not silently lost, but off and
+   * no longer shown in the panel.
+   */
   reasoning: {
     enabled: false,
     pressureRatio: 0.75,
@@ -116,9 +171,16 @@ export const DEFAULTS = Object.freeze({
     maxPassMs: 90000,
     model: { provider: '', model: '', prompt: DEFAULT_MODEL_PROMPT, maxTokens: 512 },
   },
+  /**
+   * Tool-output pruning: the shipped pruner's algorithm, at its own defaults.
+   *
+   * 8192 / 4096 / 1024 are exactly `dsh-compaction-tool-result-pruner`'s
+   * numbers. It exists as a zero-cost first pass — trimming repetitive output
+   * before anything is sent to a model.
+   */
   tools: {
     enabled: false,
-    pressureRatio: 0.75,
+    pressureRatio: 0.6,
     mode: 'truncate',
     thresholdChars: 8192,
     minTotalChars: 15000,
@@ -158,6 +220,7 @@ export function normalizeConfig(raw) {
   const total = pick(DEFAULTS.total, input.total)
   const reasoning = pick(DEFAULTS.reasoning, input.reasoning)
   const tools = pick(DEFAULTS.tools, input.tools)
+  const turns = pick(DEFAULTS.turns, input.turns)
   // Migration: before batching, `minChars` was a per-fragment trigger (2000).
   // It is now a per-fragment floor, so a legacy value would silently skip every
   // small fragment. A config without `batchChars` is legacy and is re-seeded.
@@ -167,16 +230,22 @@ export function normalizeConfig(raw) {
   // A prompt that is mostly `?` is what a non-UTF-8 writer leaves behind, so it
   // is treated the same way and can never reach the model.
   if (isUnusablePrompt(total.prompt)) total.prompt = DEFAULT_TOTAL_PROMPT
+  if (isUnusablePrompt(turns.prompt)) turns.prompt = DEFAULT_TURN_PROMPT
   if (isUnusablePrompt(reasoningModel.prompt)) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
   if (isUnusablePrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
   // Legacy defaults carried the output format ("只输出要点"), which used to fight
   // the batching layer's own instruction. Re-seed those exact old texts.
   if (isLegacyModelPrompt(reasoningModel.prompt)) reasoningModel.prompt = DEFAULT_MODEL_PROMPT
   if (isLegacyModelPrompt(toolsModel.prompt)) toolsModel.prompt = DEFAULT_MODEL_PROMPT
+  // Turn compression supersedes thinking compression, so a config that still has
+  // `reasoning` on is coerced off: leaving it on would run both passes over the
+  // same content and pay twice.
+  reasoning.enabled = false
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     archiveDir: typeof input.archiveDir === 'string' ? input.archiveDir : DEFAULTS.archiveDir,
     archiveEnabled: input.archiveEnabled === undefined ? DEFAULTS.archiveEnabled : input.archiveEnabled === true,
+    turns,
     total,
     reasoning: { ...reasoning, model: reasoningModel },
     tools: {
@@ -650,6 +719,171 @@ function findOwnEntry(configEditor) {
 }
 
 /**
+ * Condense the middle of old turns, leaving every user instruction untouched.
+ *
+ * For each turn older than `keepLast`, everything between the instruction and
+ * the next instruction — reasoning, tool calls, tool results, assistant replies —
+ * is sent to the model as one transcript, and the span is replaced by a single
+ * `assistant/message` carrying the condensed result.
+ *
+ * `assistant/message` is the right role (the summary describes what the model
+ * did) and it also determines one constraint: the log forbids that type from
+ * carrying `sourceEventSeqs`, so the link back to the originals lives in the
+ * archive file, which stores the full transcript.
+ *
+ * @param {any} ctx - plugin context.
+ * @param {any} session - live session.
+ * @param {any} policy - turns section config.
+ * @param {number} currentTurn - turn that owns these writes.
+ * @param {AbortSignal | undefined} signal - step cancellation.
+ * @param {any} stats - live counters.
+ * @param {{ root: string, lastPath: string | null }} archive - archive target.
+ * @param {(() => boolean) | undefined} stillOpen - checked before every append.
+ * @returns {Promise<{ items: number, chars: number, failed: number, archived: number }>} what landed.
+ */
+async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archive, stillOpen) {
+  const intervals = findTurnIntervals(session)
+  const keepLast = Number.isFinite(policy.keepLast) ? Math.max(0, Math.trunc(policy.keepLast)) : 2
+  const minChars = Number.isFinite(policy.minChars) ? policy.minChars : 2000
+  const maxInput = Number.isFinite(policy.maxInputChars) ? policy.maxInputChars : 24000
+  const maxSummary = Number.isFinite(policy.maxSummaryChars) ? policy.maxSummaryChars : 2000
+  const maxTurns = Number.isFinite(policy.maxTurnsPerPass) ? policy.maxTurnsPerPass : 6
+  const budgetMs = Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 180000
+
+  // Oldest first, and never the most recent `keepLast` turns: those are the
+  // live working set.
+  const eligible = intervals.slice(0, Math.max(0, intervals.length - keepLast))
+
+  const routed = session.requestContext?.() ?? {}
+  const modelCfg = {
+    provider: policy.provider || routed.provider || '',
+    model: policy.model || routed.model || '',
+    prompt: policy.prompt || DEFAULT_TURN_PROMPT,
+    maxTokens: Number.isFinite(policy.maxTokens) ? policy.maxTokens : 1200,
+  }
+
+  let items = 0
+  let chars = 0
+  let failed = 0
+  let archived = 0
+  const startedAt = Date.now()
+
+  void logLine('info', 'turns pass start', {
+    intervals: intervals.length,
+    eligible: eligible.length,
+    provider: modelCfg.provider,
+    model: modelCfg.model,
+  })
+
+  for (const interval of eligible) {
+    if (items >= maxTurns) break
+    signal?.throwIfAborted?.()
+    if (stillOpen !== undefined && !stillOpen()) {
+      void logLine('warn', 'turns aborted: turn closed', { items })
+      break
+    }
+    if (Date.now() - startedAt > budgetMs) {
+      lastFailure = `turns: 本轮处理了 ${items} 轮后到达 ${budgetMs}ms 预算`
+      void logLine('warn', 'turns budget reached', { items, remaining: eligible.length - items })
+      break
+    }
+    // Already condensed: the middle is our own checkpoint.
+    if (isCondensedMiddle(session, interval)) continue
+
+    const middle = middleChars(session, interval.middleSeqs)
+    if (middle < minChars) continue
+
+    const transcript = middleTranscript(session, interval.middleSeqs)
+    if (transcript === '') continue
+    const input = transcript.length > maxInput ? transcript.slice(0, maxInput) : transcript
+
+    let summary = ''
+    try {
+      summary = await summarize(ctx, modelCfg, input, signal)
+    } catch (error) {
+      failed += 1
+      lastFailure = `turn ${interval.userSeq}: ${String(error?.message ?? error)}`
+      if (failed <= 3) {
+        void logLine('error', 'turns summarize failed', {
+          seq: interval.userSeq,
+          error: String(error?.message ?? error),
+        })
+      }
+      continue
+    }
+    summary = summary.trim()
+    if (summary === '') {
+      failed += 1
+      lastFailure = `turn ${interval.userSeq}: 模型返回空摘要`
+      continue
+    }
+    if ([...summary].length > maxSummary) summary = [...summary].slice(0, maxSummary).join('')
+
+    const lastEvent = session.eventAt(interval.middleSeqs.at(-1))
+    const turn = Number.isFinite(lastEvent?.data?.turn) ? lastEvent.data.turn : currentTurn
+    try {
+      // The replacement MUST cite every shadowed node, and `assistant/message`
+      // is forbidden from citing anything — the two rules are mutually
+      // exclusive, so an assistant replacement is impossible for a multi-node
+      // span. A `user/message` may cite, which makes it the only legal carrier.
+      //
+      // The role is therefore wrong on paper (the text is the model's work, not
+      // the user's words), so the marker prefix has to carry that distinction
+      // instead: `TURN_MARKER` is assertable and the panel/archive both keep the
+      // original text.
+      session.append('user/message', {
+        id: `compact-arsenal-turn-${interval.userSeq}-${Date.now()}`,
+        role: 'user',
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: frameSummary(summary) }],
+      }, {
+        surfaceOp: { op: 'replace', startSeq: interval.middleSeqs[0], endSeq: interval.middleSeqs.at(-1) },
+        sourceEventSeqs: interval.middleSeqs,
+      })
+    } catch (error) {
+      failed += 1
+      lastFailure = `turn ${interval.userSeq}: ${String(error?.message ?? error)}`
+      void logLine('error', 'turns append rejected', {
+        seq: interval.userSeq,
+        error: String(error?.message ?? error),
+      })
+      continue
+    }
+
+    items += 1
+    chars += Math.max(0, middle - summary.length)
+
+    if (policy.archiveEnabled !== false) {
+      const path = await archiveRewrite({
+        root: archive.root,
+        sessionId: session.id,
+        sessionTitle: sessionTitleOf(session),
+        kind: 'turn',
+        method: 'model',
+        seq: interval.userSeq,
+        original: transcript,
+        replacement: summary,
+        summary,
+      })
+      if (path !== undefined) {
+        archived += 1
+        archive.lastPath = path
+      }
+    }
+  }
+
+  void logLine('info', 'turns pass end', {
+    items,
+    chars,
+    failed,
+    archived,
+    elapsedMs: Date.now() - startedAt,
+  })
+
+  return { items, chars, failed, archived }
+}
+
+/**
  * Summarize the oldest closed turns into one checkpoint message.
  *
  * This is a surface replacement of whole turns, so tool calls and their
@@ -945,6 +1179,24 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
       chars: saved.chars,
       failed: saved.failed ?? 0,
     })
+  }
+
+  // Turn compression sits between the zero-cost tool trim and the whole-history
+  // checkpoint: it is the first pass that costs a model call, and it is scoped
+  // to single turns so the user's own words are never rewritten.
+  if (config.turns.enabled && underPressure(ctx, session, config.turns.pressureRatio)) {
+    const saved = await turnsPass(ctx, session, config.turns, payload.turn, payload.signal, stats, archive, stillOpen)
+    stats.turns = (stats.turns ?? 0) + saved.items
+    stats.failed += saved.failed ?? 0
+    stats.chars += saved.chars
+    stats.archived += saved.archived ?? 0
+    void logLine('info', 'turns pass', {
+      items: saved.items,
+      chars: saved.chars,
+      failed: saved.failed ?? 0,
+    })
+  } else if (config.turns.enabled) {
+    void logLine('info', 'cascade skip', { section: 'turns', reason: 'below threshold' })
   }
 
   // Total last: it rewrites whole turns, so everything cheaper ran first.

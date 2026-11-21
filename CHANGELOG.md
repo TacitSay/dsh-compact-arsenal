@@ -16,6 +16,50 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.12.0] — 2026-11-21
+
+### Added
+
+- **轮次压缩.** The plugin now condenses what the model *did* inside a turn:
+  everything between one user instruction and the next — reasoning, tool calls,
+  tool output, assistant replies — goes to the model as one transcript, and the
+  span is replaced by a single condensed block.
+
+  The instruction itself is never part of the input, so **the user's own words
+  are never rewritten**. That is what makes the coarse granularity safe: a
+  requirement cannot be paraphrased away, because it is not in the text being
+  summarized.
+
+### Changed
+
+- **思考压缩 removed.** Turn compression subsumes it: reasoning is now condensed
+  together with the tool calls around it, in context, instead of as an isolated
+  fragment with no idea what task it served. The config key is still read and
+  coerced off, so an existing setting cannot keep both passes running over the
+  same content.
+- **工具输出剪枝 now mirrors the shipped pruner exactly** — 8192 / 4096 / 1024,
+  the same numbers `dsh-compaction-tool-result-pruner` uses — and stays off by
+  default. It is a zero-cost first pass for repetitive output, not a feature of
+  its own.
+- The cascade is now: tool trim (free) → turn compression (one call per turn) →
+  whole-history checkpoint (most expensive, last).
+
+### Why the checkpoint is a `user/message`
+
+Two log rules are mutually exclusive: a replacement **must** cite every shadowed
+node, and `assistant/message` **may not** cite anything. An assistant
+replacement of a multi-node span is therefore impossible — verified against the
+packaged `dsh-session`, where it throws
+`assistant/message embeds its source stream`. The checkpoint is a
+`user/message` carrying a `[compact-arsenal turn summary]` prefix, and the
+archive keeps the full original transcript so the source stays recoverable.
+
+### Added (tests)
+
+- `test/turns.test.mjs`: interval detection (real instructions only, injected
+  context excluded), transcript content, the impossibility of an assistant
+  replacement, and idempotence via the checkpoint marker.
+
 ## [0.11.2] — 2026-11-21
 
 ### Changed
