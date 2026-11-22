@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.13.1'
+export const PACKAGE_VERSION = '0.14.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -971,6 +971,9 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     chars,
     failed,
     archived,
+    // How many turns kept their closing reply verbatim. This is the property that
+    // makes the result readable later, so it is worth recording per pass.
+    keptReplies: intervals.reduce((n, iv) => n + (iv.keepSeqs.length > 0 ? 1 : 0), 0),
     elapsedMs: Date.now() - startedAt,
   })
 

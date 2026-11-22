@@ -16,6 +16,46 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.14.0] — 2026-11-22
+
+### Fixed
+
+- **The closing assistant reply is no longer compressed.** A turn ends with the
+  answer — what changed, what the result was, what comes next — and that reply was
+  inside the condensed span, so the next model read a paraphrase where it could
+  read the real thing. The interval now stops before the trailing assistant
+  messages and only the process above them is condensed.
+
+  Measured on a real session: 91 intervals, every one now ends with a
+  `tool/result` and keeps its reply verbatim (e.g. "两个都装好了，
+  `application: applied`，无警告"). A turn with nothing but replies — a plain
+  question and answer — produces no interval at all, because there is no process
+  to condense.
+
+  The archive record still stores the full original, so the reply remains
+  recoverable from the file even though it stays on the surface.
+
+### Added
+
+- `turns pass end` now reports `keptReplies`, so a pass shows how many turns kept
+  their conclusion verbatim.
+
+### Notes on cost
+
+Measured on one real pass (20 turns, 487,501 chars saved, 184s):
+
+| item | value |
+|---|---|
+| one pass costs | ~$0.10 |
+| saves per later request | ~$0.09 |
+| break-even | ~2 requests |
+
+So a pass pays for itself within one tool-using turn — **provided the session
+continues**. Compressing near the window limit and then ending the session spends
+the cost without using the saving. Repeated passes do not compound their benefit:
+the history is already small after the first one, so each later pass costs again
+while saving less.
+
 ## [0.13.1] — 2026-11-22
 
 Four problems found by auditing a running install instead of the source.

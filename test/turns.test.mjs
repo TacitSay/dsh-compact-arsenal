@@ -71,11 +71,48 @@ test('an injected user/message is not treated as an instruction', () => {
   assert.equal(isUserInstruction({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '真的要求' }] } }), true)
 })
 
-test('an interval spans instruction → next instruction', { skip }, () => {
+test('an interval spans instruction → before the closing reply', { skip }, () => {
   const s = seed()
   const intervals = findTurnIntervals(s)
-  assert.equal(intervals.length, 1, 'the trailing instruction has no middle')
-  assert.equal(intervals[0].middleSeqs.length, 3, 'assistant + tool + assistant')
+  assert.equal(intervals.length, 1, 'the trailing instruction has no body')
+  // The turn is: assistant(tool-call) + tool + assistant(final). The final reply
+  // is the conclusion and stays verbatim, so only the first two are condensed.
+  assert.equal(intervals[0].middleSeqs.length, 2, 'assistant + tool')
+  assert.equal(intervals[0].keepSeqs.length, 1, 'the closing reply is kept')
+})
+
+test('the closing assistant reply never enters the condensed span', { skip }, () => {
+  const s = seed()
+  const [iv] = findTurnIntervals(s)
+  const lastMiddle = s.eventAt(iv.middleSeqs.at(-1))
+  assert.notEqual(lastMiddle.type, 'assistant/message', 'the middle ends with process, not the answer')
+  const kept = s.eventAt(iv.keepSeqs.at(-1))
+  assert.equal(kept.type, 'assistant/message')
+  const text = (kept.data?.message?.content ?? []).filter((b) => b?.type === 'text').map((b) => b.text).join('')
+  assert.ok(text.includes('改好了'), 'the real answer survives on the surface')
+})
+
+test('a turn of nothing but replies has no middle to condense', { skip }, () => {
+  // A pure Q&A turn (user → assistant, no tool round) has nothing between the
+  // instruction and the answer. Condensing it would replace the answer with a
+  // paraphrase of itself, so such an interval must simply not be produced.
+  const s = Session.create('qa-only', [], {
+    version: 4, id: 'qa-only', createdAt: Date.now(), isSeeded: false,
+  })
+  s.append('system/message', {
+    turn: 1, step: 1,
+    message: { id: 'sys2', role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: 'sys' }] },
+  }, { surfaceOp: 'append' })
+  s.append('user/message', {
+    id: 'q1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '这是什么' }],
+  }, { surfaceOp: 'append' })
+  s.append('assistant/message', {
+    turn: 1, step: 1,
+    message: { id: 'ans1', role: 'assistant', source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '这是答案' }] },
+    stream: [],
+  }, { surfaceOp: 'append' })
+
+  assert.equal(findTurnIntervals(s).length, 0, 'a Q&A-only turn produces no interval')
 })
 
 test('the transcript carries tool calls and their arguments', { skip }, () => {
@@ -84,7 +121,7 @@ test('the transcript carries tool calls and their arguments', { skip }, () => {
   const text = middleTranscript(s, iv.middleSeqs)
   assert.ok(text.includes('edit'), 'the tool name survives')
   assert.ok(text.includes('X'), 'the call arguments survive')
-  assert.ok(text.includes('改好了'), 'the conclusion survives')
+  assert.ok(!text.includes('改好了'), 'the closing reply is not in the transcript')
   assert.ok(middleChars(s, iv.middleSeqs) > 0)
 })
 
