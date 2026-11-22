@@ -693,6 +693,16 @@ window.__ModuleLoader__.load({
             key: 'off',
             style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
           }, '总开关已关闭：三个板块都不会执行。'),
+        // Success totals were not shown at all: only failures and the archive
+        // count appeared, so a working pass looked identical to an idle one.
+        stats.turns > 0 || stats.chars > 0
+          ? h('p', { key: 'done', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
+            [
+              stats.turns > 0 ? `已压缩 ${stats.turns} 轮` : null,
+              stats.tools > 0 ? `工具剪枝 ${stats.tools} 处` : null,
+              stats.chars > 0 ? `共省下 ${stats.chars.toLocaleString()} 字符` : null,
+            ].filter(Boolean).join(' · '))
+          : null,
         stats.failed > 0
           ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },
             `失败 ${stats.failed} 次（未落盘，不计入节省）：${lastFailure || '原因未记录'}`)

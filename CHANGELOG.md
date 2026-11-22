@@ -16,6 +16,38 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.13.1] — 2026-11-22
+
+Four problems found by auditing a running install instead of the source.
+
+### Fixed
+
+- **A saved config silently overrode the new defaults.** `cordis.patch.yml`
+  stores what the panel last wrote, and those values win — so raising
+  `maxInputChars` to 96,000 in code changed nothing on an install that had
+  already saved 24,000. Batching was therefore still fitting one turn per call.
+  Both the shipped config and the runtime fallbacks now agree, and a test pins
+  the two together so a future default bump cannot drift again.
+
+- **A short session skipped compression without saying why.** With
+  `keepLast: 2`, a session with two turns produces zero eligible intervals — the
+  switch is on, pressure is over the threshold, and nothing happens. The log now
+  distinguishes "no user turns yet" from "all turns are inside keepLast, N more
+  needed".
+
+- **A missing route failed every batch separately.** An empty provider/model
+  threw per batch, so the log filled with identical failures. The check now runs
+  once, before any batch, and names what to configure.
+
+- **The panel reported failures but never successes.** Only the failure count and
+  the archive total were shown, which made a working pass look like an idle one.
+  It now reports turns compressed, tool trims, and characters saved.
+
+### Changed
+
+- `stats.turns` is declared with the other counters instead of being added
+  lazily, so a fresh panel shows `0` rather than nothing.
+
 ## [0.13.0] — 2026-11-21
 
 ### Changed

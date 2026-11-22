@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.13.0'
+export const PACKAGE_VERSION = '0.13.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -358,7 +358,10 @@ export function apply(ctx, rawConfig) {
 
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
-  const stats = { reasoning: 0, tools: 0, chars: 0, failed: 0, archived: 0 }
+  // `turns` is declared here rather than added lazily: a counter that appears
+  // only after the first successful pass reads as undefined on a fresh start,
+  // and the panel would show nothing for it.
+  const stats = { reasoning: 0, tools: 0, turns: 0, chars: 0, failed: 0, archived: 0 }
   /**
    * Last observed pressure inputs, so the panel can show both the provider's
    * number and the heuristic estimate that the gate falls back to.
@@ -777,7 +780,7 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   const intervals = findTurnIntervals(session)
   const keepLast = Number.isFinite(policy.keepLast) ? Math.max(0, Math.trunc(policy.keepLast)) : 2
   const minChars = Number.isFinite(policy.minChars) ? policy.minChars : 2000
-  const maxInput = Number.isFinite(policy.maxInputChars) ? policy.maxInputChars : 24000
+  const maxInput = Number.isFinite(policy.maxInputChars) ? policy.maxInputChars : 96000
   // Ratio of the middle the summary may occupy. Empty / 0 means unlimited.
   const ratio = Number.isFinite(policy.summaryRatio) && policy.summaryRatio > 0
     ? Math.min(1, policy.summaryRatio)
@@ -796,7 +799,34 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     provider: policy.provider || routed.provider || '',
     model: policy.model || routed.model || '',
     prompt: policy.prompt || DEFAULT_TURN_PROMPT,
-    maxTokens: Number.isFinite(policy.maxTokens) ? policy.maxTokens : 1200,
+    maxTokens: Number.isFinite(policy.maxTokens) ? policy.maxTokens : 4000,
+  }
+
+  // Nothing to do for three different reasons, and they used to look identical
+  // from the outside — the switch was on, pressure was over the threshold, and
+  // yet no line said why. Each case gets its own message.
+  if (intervals.length === 0) {
+    void logLine('info', 'turns idle', { reason: 'no user turns found yet' })
+    return { items: 0, chars: 0, failed: 0, archived: 0 }
+  }
+  if (eligible.length === 0) {
+    void logLine('info', 'turns idle', {
+      reason: `只有 ${intervals.length} 轮，keepLast=${keepLast} 全部保留；需超过 ${keepLast} 轮才会压缩`,
+      intervals: intervals.length,
+      keepLast,
+    })
+    return { items: 0, chars: 0, failed: 0, archived: 0 }
+  }
+  // A missing route fails every batch identically, so say it once, up front,
+  // instead of once per batch with a stack-trace-shaped message.
+  if (modelCfg.provider === '' || modelCfg.model === '') {
+    lastFailure = 'turns: 压缩模型未配置，且当前会话没有可继承的路由'
+    void logLine('error', 'turns misconfigured', {
+      provider: modelCfg.provider || '(empty)',
+      model: modelCfg.model || '(empty)',
+      hint: '在面板「轮次压缩 → 压缩模型」里选择一个，或留空并确保会话有活动模型',
+    })
+    return { items: 0, chars: 0, failed: 1, archived: 0 }
   }
 
   let items = 0
@@ -1250,7 +1280,7 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   // to single turns so the user's own words are never rewritten.
   if (config.turns.enabled && underPressure(ctx, session, config.turns.pressureRatio)) {
     const saved = await turnsPass(ctx, session, config.turns, payload.turn, payload.signal, stats, archive, stillOpen)
-    stats.turns = (stats.turns ?? 0) + saved.items
+    stats.turns += saved.items
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
     stats.archived += saved.archived ?? 0
