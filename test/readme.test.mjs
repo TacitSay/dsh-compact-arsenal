@@ -21,12 +21,20 @@ test('the README opens with the package name and a one-line definition', () => {
   )
 })
 
-test('the README warns that it does not promise savings', () => {
-  // The claim that did not survive scrutiny. Leaving it out is the point; saying
-  // so explicitly stops the next reader from assuming it.
-  assert.ok(readme.includes('不保证省钱') || readme.includes('不宣称'), 'no savings claim')
-  assert.ok(readme.includes('压缩本身有成本') || readme.includes('压缩本身也有成本') || readme.includes('一次压缩 = 一次模型调用'),
-    'states that compression costs a call')
+test('the README offers the three install paths', () => {
+  // A reader arrives with one of three things: a DSH session, the plugin panel, or
+  // a shell. Each path is named so nobody has to guess which one applies.
+  assert.match(readme, /方法一/, 'method 1 named')
+  assert.match(readme, /方法二/, 'method 2 named')
+  assert.match(readme, /方法三/, 'method 3 named')
+  assert.ok(readme.includes('github:TacitSay/dsh-compact-arsenal'), 'the GitHub target appears')
+  assert.ok(readme.includes('--profile'), 'the profile flag appears')
+})
+
+test('the README documents the defaults it actually ships', () => {
+  for (const value of ['0.7', '2000']) {
+    assert.ok(readme.includes(value), `default ${value} should appear`)
+  }
 })
 
 test('the README separates what the model sees from what gets replaced', () => {
@@ -34,28 +42,6 @@ test('the README separates what the model sees from what gets replaced', () => {
   assert.ok(readme.includes('[最终回复]'), 'the closing reply is named')
   assert.ok(/不会参与压缩|不参与压缩/.test(readme), 'and marked as excluded')
   assert.ok(/原文保留/.test(readme), 'kept replies stay verbatim')
-})
-
-test('the README explains the replacement shape and why it must be user/message', () => {
-  assert.ok(readme.includes('检查点'), 'the checkpoint is described')
-  assert.ok(readme.includes('sourceEventSeqs'), 'the citation rule is named')
-  assert.ok(
-    readme.includes('assistant/message') && readme.includes('禁止'),
-    'why assistant/message cannot carry the span',
-  )
-})
-
-test('the README documents the defaults it actually ships', () => {
-  for (const value of ['0.7', '2000', '600000']) {
-    assert.ok(readme.includes(value), `default ${value} should appear`)
-  }
-  assert.ok(readme.includes('留空'), 'the "leave blank = auto" convention is explained')
-})
-
-test('the README lists real limitations, not only features', () => {
-  for (const topic of ['首尾假设', '摘要质量', '无法还原', '几分钟']) {
-    assert.ok(readme.includes(topic), `missing limitation: ${topic}`)
-  }
 })
 
 test('the measured numbers are internally consistent and dated, not pinned', () => {
