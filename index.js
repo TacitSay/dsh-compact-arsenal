@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.16.0'
+export const PACKAGE_VERSION = '0.17.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -98,10 +98,12 @@ const DEFAULT_TOTAL_PROMPT = '把这段对话压缩成一份结构化的中文�
  * prompt only has to describe the work.
  */
 const DEFAULT_TURN_PROMPT = `下面是一轮对话中「模型做了什么」的完整记录，包含思考、工具调用和返回结果。
+末尾可能带有一段 [最终回复]，那是这一轮结束时给出的答复——它本身不会被压缩，只是让你知道最终结果是什么。
 请把它压缩成一段简洁的中文记录，要求：
 - 保留执行过的命令与关键参数、文件路径、报错原文、关键数值；
-- 说明最终结果（成功/失败）与得出的结论；
+- 说明最终结果（成功/失败）与得出的结论；结论应与 [最终回复] 一致；
 - 若中途有被推翻的方案，只记最终采用的；
+- 不要把 [最终回复] 原文照抄进摘要，只需让你的记录与它相符；
 - 用紧凑的要点式叙述，不要评论，不要提及压缩本身。
 只输出压缩后的内容本身，不要加标题或前缀。`
 
@@ -819,6 +821,42 @@ function findOwnEntry(configEditor) {
 }
 
 /**
+ * Append the turn's closing reply to a transcript, marked as context-only.
+ *
+ * The reply is NOT part of the replaced span — it stays on the surface verbatim —
+ * but the model should see it: it is the conclusion the process arrived at, and a
+ * summary written without it has to guess where the work landed, which is how a
+ * record ends up disagreeing with the answer sitting right below it.
+ *
+ * The marker matters. Without it the model would try to summarize the reply as
+ * part of the process, and the batch reply would carry a second, lossy copy of
+ * text that already survives.
+ *
+ * @param {any} session - live session.
+ * @param {string} transcript - the middle-only transcript.
+ * @param {readonly number[]} keepSeqs - trailing assistant messages, kept verbatim.
+ * @returns {string} transcript with a clearly-labelled tail.
+ */
+function withClosingReply(session, transcript, keepSeqs) {
+  if (keepSeqs.length === 0) return transcript
+  const replies = []
+  for (const seq of keepSeqs) {
+    const event = session.eventAt(seq)
+    if (event === undefined) continue
+    const blocks = event.data?.message?.content
+    if (!Array.isArray(blocks)) continue
+    const text = blocks
+      .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('')
+      .trim()
+    if (text !== '') replies.push(text)
+  }
+  if (replies.length === 0) return transcript
+  return `${transcript}\n\n[最终回复] 以下是这一轮结束时我给出的答复，它不会参与压缩，仅用于让你理解结果：\n${replies.join('\n---\n')}`
+}
+
+/**
  * Condense the middle of old turns, leaving every user instruction untouched.
  *
  * For each turn older than `keepLast`, everything between the instruction and
@@ -925,7 +963,15 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     if (isCondensedMiddle(session, interval)) continue
     const middle = middleChars(session, interval.middleSeqs)
     if (middle < minChars) continue
-    const transcript = middleTranscript(session, interval.middleSeqs)
+    // The model gets the closing reply too, even though it is NOT part of the
+    // replaced span. It is the conclusion the process led to, so showing it is
+    // what lets the model write a summary that agrees with the answer that stays
+    // on the surface — without it the summary has to guess where the work landed.
+    const transcript = withClosingReply(
+      session,
+      middleTranscript(session, interval.middleSeqs),
+      interval.keepSeqs,
+    )
     if (transcript === '') continue
 
     const clipped = transcript.length > maxInput ? transcript.slice(0, maxInput) : transcript

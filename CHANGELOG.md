@@ -16,6 +16,35 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.17.0] — 2026-11-23
+
+### Changed
+
+- **The request now carries the turn's closing reply; the replacement still does
+  not.** These were being treated as one decision, and they are two:
+
+  | | includes the closing reply? |
+  |---|---|
+  | what the model is sent | **yes** |
+  | what gets replaced | **no** |
+
+  The reply is the conclusion the process arrived at. A summary written without it
+  has to guess where the work landed, which is how a record ends up disagreeing
+  with the answer sitting directly below it on the surface. So the tail is appended
+  under a `[最终回复]` label, and the prompt tells the model it is context — to make
+  the record agree with it, not to copy it in.
+
+  The replacement span is unchanged: `startSeq`/`endSeq` still cover only
+  `middleSeqs`, and `keepSeqs` is never shadowed. Measured on a real session: a
+  337,032-char middle gained 2,079 chars of tail, and the span ended at seq 99 with
+  the reply at seq 100 carried by the next node.
+
+### Added
+
+- `test/request-vs-replace.test.mjs`: pins the distinction — the tail is present
+  and labelled in the request, absent from the shadowed span, and the prompt
+  forbids copying it into the summary.
+
 ## [0.16.0] — 2026-11-23
 
 ### Changed
