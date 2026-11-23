@@ -47,7 +47,7 @@ function seed() {
     },
   }, { surfaceOp: 'append' })
   session.append('user/message', {
-    id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }],
+    id: 'u1', role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: 'hi' }],
   }, { surfaceOp: 'append' })
   // The tool result was produced in turn 1; the replacement will be written
   // while turn 2 is open, which is what the live pass looks like.
@@ -95,7 +95,7 @@ test('a user/message checkpoint may carry the current turn and needs an id', { s
   const checkpoint = {
     id: 'compact-arsenal-tools-1-t',
     role: 'user',
-    source: { kind: 'user' },
+    source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text: 'condensed' }],
     turn: 2,
     step: 1,

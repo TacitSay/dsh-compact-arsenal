@@ -45,7 +45,7 @@ function buildUserCheckpoint(text, kind, seq, currentTurn) {
   const checkpoint = {
     id: `compact-arsenal-${kind}-${seq}-${Date.now()}`,
     role: 'user',
-    source: { kind: 'user' },
+    source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text }],
   }
   if (Number.isFinite(currentTurn)) {
@@ -66,7 +66,7 @@ function seedSession() {
     },
   }, { surfaceOp: 'append' })
   session.append('user/message', {
-    id: 'user-1', role: 'user', source: { kind: 'user' },
+    id: 'user-1', role: 'user', source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text: 'hello' }],
   }, { surfaceOp: 'append' })
   session.append('assistant/message', {
@@ -111,7 +111,7 @@ test('the live append does NOT reject an id-less checkpoint — reload does', { 
   const target = session.surface.nodes.at(-1)
   const broken = {
     role: 'user',
-    source: { kind: 'user' },
+    source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text: 'condensed' }],
   }
   // This is the mechanism behind incident #2: a live append accepts the payload,

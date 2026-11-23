@@ -36,7 +36,7 @@ function seed() {
     message: { id: 'sys', role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: 'sys' }] },
   }, { surfaceOp: 'append' })
   s.append('user/message', {
-    id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '把 X 改成 Y' }],
+    id: 'u1', role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: '把 X 改成 Y' }],
   }, { surfaceOp: 'append' })
   s.append('assistant/message', {
     turn: 1, step: 1,
@@ -59,7 +59,7 @@ function seed() {
     stream: [],
   }, { surfaceOp: 'append' })
   s.append('user/message', {
-    id: 'u2', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '再改 Z' }],
+    id: 'u2', role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: '再改 Z' }],
   }, { surfaceOp: 'append' })
   return s
 }
@@ -68,7 +68,7 @@ test('an injected user/message is not treated as an instruction', () => {
   // Time snapshots and plugin recall also arrive as user/message; starting a
   // turn at one of those would put a timestamp where the ask belongs.
   assert.equal(isUserInstruction({ type: 'user/message', data: { source: { kind: 'time-context' }, content: [{ type: 'text', text: 't' }] } }), false)
-  assert.equal(isUserInstruction({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '真的要求' }] } }), true)
+  assert.equal(isUserInstruction({ type: 'user/message', data: { source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: '真的要求' }] } }), true)
 })
 
 test('an interval spans instruction → before the closing reply', { skip }, () => {
@@ -104,7 +104,7 @@ test('a turn of nothing but replies has no middle to condense', { skip }, () => 
     message: { id: 'sys2', role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: 'sys' }] },
   }, { surfaceOp: 'append' })
   s.append('user/message', {
-    id: 'q1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '这是什么' }],
+    id: 'q1', role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: '这是什么' }],
   }, { surfaceOp: 'append' })
   s.append('assistant/message', {
     turn: 1, step: 1,
@@ -149,7 +149,7 @@ test('a condensed middle is recognised, so the turn is not compressed twice', { 
   s.append('user/message', {
     id: `compact-arsenal-turn-${iv.userSeq}-1`,
     role: 'user',
-    source: { kind: 'user' },
+    source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text: frameSummary('执行了 edit，改好了。') }],
   }, {
     surfaceOp: { op: 'replace', startSeq: iv.middleSeqs[0], endSeq: iv.middleSeqs.at(-1) },

@@ -41,7 +41,7 @@ function makeSession() {
     message: { role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: 'sys' }] },
   }, { surfaceOp: 'append' })
   session.append('user/message', {
-    role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }],
+    role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: 'hi' }],
   }, { surfaceOp: 'append' })
   session.append('assistant/message', {
     turn: 1, step: 1,
@@ -80,7 +80,7 @@ test('a user/message checkpoint can replace an assistant node', { skip }, () => 
   const seq = session.surface.nodes.at(-1)
   const before = [...session.surface.nodes]
   session.append('user/message', {
-    role: 'user', source: { kind: 'user' },
+    role: 'user', source: { kind: 'user', rpcId: 'rpc-test' },
     content: [{ type: 'text', text: '<compacted-summary>要点</compacted-summary>' }],
   }, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
   const after = [...session.surface.nodes]
@@ -91,7 +91,7 @@ test('a user/message checkpoint can replace an assistant node', { skip }, () => 
 test('a tool/result may be replaced in place when it cites itself', { skip }, () => {
   const session = Session.create('session-shape-test-2')
   session.append('user/message', {
-    role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'go' }],
+    role: 'user', source: { kind: 'user', rpcId: 'rpc-test' }, content: [{ type: 'text', text: 'go' }],
   }, { surfaceOp: 'append' })
   session.append('tool/result', {
     turn: 1, step: 1,

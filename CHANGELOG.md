@@ -16,6 +16,51 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.17.2] — 2026-11-23
+
+### Fixed
+
+- **Inject blocks were being treated as user instructions.** `isUserInstruction`
+  accepted anything with `source.kind === 'user'`. Measured on a real session:
+
+  | source | count | who wrote it |
+  |---|---|---|
+  | `{kind:'user', rpcId, clientTimeZone}` | 109 | the human, via client RPC |
+  | `{kind:'user'}` | 197 | injected — DSH's compaction checkpoint, hindsight recall, our own old checkpoints |
+
+  An injected block would become a turn boundary, so the span between two
+  injections — which can hold many real instructions — was condensed into one
+  summary. On the session that surfaced this, 71 genuine-looking messages ended up
+  inside our replacement spans.
+
+  The discriminator is `rpcId`: only a message delivered over the client RPC has
+  one. Tightening is deliberately conservative — if a real message ever lacks
+  `rpcId`, the cost is that we skip compressing that turn, not that we fold real
+  instructions into a summary.
+
+  Verified on the real session: intervals found went 87 → 86, so compression keeps
+  working, and every interval now starts at a genuine instruction.
+
+- **The JSON parser lost whole batches to a greedy regex.** `String(raw).match(/\[[\s\S]*\]/)`
+  matches from the first `[` to the LAST `]`, so a reply like
+
+      [{"i":1,"s":"..."}]
+      注意：[重要] 已完成
+
+  produced an unparseable span and the batch was discarded — two 12-turn batches in
+  one pass, visible in the log as `turn-batch-parse-failed`.
+
+  It now scans each `]` from the first `[` outward and takes the first prefix that
+  parses to an array, so trailing bracketed prose is ignored while a genuinely
+  truncated reply still fails.
+
+### Added
+
+- `test/instruction-detection.test.mjs` — injected blocks never start a turn; only
+  a client message does.
+- `test/parse-robustness.test.mjs` — 10 cases covering the bracket patterns that
+  real replies contain.
+
 ## [0.17.1] — 2026-11-23
 
 ### Fixed
