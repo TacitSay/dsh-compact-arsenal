@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.15.0'
+export const PACKAGE_VERSION = '0.16.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -137,15 +137,11 @@ export const DEFAULTS = Object.freeze({
     /**
      * Total transcript characters per model call.
      *
-     * Measured on a real session: turn transcripts average ~21,600 chars, so a
-     * 24,000 budget fits roughly ONE turn per call — batching then saves almost
-     * nothing. At 96,000 the same 26 turns take 8 calls instead of 26.
-     *
-     * The ceiling is the model's context window: on a 1M-token route (~1.35M chars
-     * of usable input) this leaves ample room. Raise it toward 1,200,000 to fit a
-     * whole session in one call; a smaller-window model needs it lowered.
+     * `null` means "derive it from the live context window" — see
+     * `deriveInputBudget()`. A number is used as-is, for a route whose window the
+     * harness cannot report.
      */
-    maxInputChars: 250000,
+    maxInputChars: null,
     /**
      * The only brake on a pass. A turn-count cap used to live here too, but it
      * stopped a 180-second budget after 51 seconds — the budget is what a user
@@ -161,13 +157,17 @@ export const DEFAULTS = Object.freeze({
     /**
      * Reply budget for ONE batch, not one turn.
      *
-     * Measured throughput on this route is ~105 output tokens/sec, and one turn's
-     * summary runs ~1,400 chars (~930 tokens). 16,000 tokens therefore holds about
-     * 17 summaries — enough that a normal session finishes in a few batches, while
-     * staying far from the truncation cliff. The per-call timeout scales with this
-     * number, so a larger value does not simply time out.
+     * `null` means "derive it from the context window" — see `deriveOutputBudget()`.
+     * The model API has its own ceiling (some routes advertise ~393,216 tokens of
+     * output), and the window is the honest upper bound: a reply cannot usefully
+     * exceed the space the request left for it. Sending a number larger than the
+     * provider allows is rejected by the provider, so deriving it from the window
+     * is both simpler and safer than guessing.
+     *
+     * The per-call timeout scales with whatever this resolves to, so a large reply
+     * budget does not simply time out.
      */
-    maxTokens: 16000,
+    maxTokens: null,
   },
   total: {
     enabled: false,
@@ -287,6 +287,70 @@ export function normalizeConfig(raw) {
       onlyTools: Array.isArray(input.tools?.onlyTools) ? input.tools.onlyTools.filter((v) => typeof v === 'string') : [],
     },
   }
+}
+
+/**
+ * Rough characters per token. CJK text sits near 1.5; a mixed code transcript
+ * skews higher, so this is deliberately conservative.
+ */
+const CHARS_PER_TOKEN = 1.5
+
+/** Share of the window a single request's input may occupy. */
+const INPUT_WINDOW_SHARE = 0.55
+
+/** Share of the window the reply may occupy. */
+const OUTPUT_WINDOW_SHARE = 0.25
+
+/** Floor for a batch, so a tiny window still produces a usable request. */
+const MIN_INPUT_CHARS = 20000
+
+/** Floor for a reply, so a small window still fits a few summaries. */
+const MIN_OUTPUT_TOKENS = 2000
+
+/**
+ * Hard ceiling on the reply budget.
+ *
+ * The provider advertises its own maximum output (a 1M-token route can report
+ * ~393,216); asking for more than that is rejected, so the derived value is
+ * clamped below it. 200,000 is comfortably under the largest advertised limit and
+ * far above any summary batch worth sending.
+ */
+const MAX_OUTPUT_TOKENS = 200000
+
+/**
+ * Derive the per-call input budget from the live context window.
+ *
+ * The window is the only honest ceiling: sending more input than the route can
+ * accept fails the request. Reserving 45% for the reply, the instruction and the
+ * provider's own overhead is what makes a large batch safe rather than merely
+ * large.
+ *
+ * @param {number | null | undefined} window - context window in tokens.
+ * @param {number | null | undefined} configured - explicit override, if any.
+ * @returns {number} characters per call.
+ */
+export function deriveInputBudget(window, configured) {
+  if (Number.isFinite(configured) && configured > 0) return configured
+  if (!Number.isFinite(window) || window <= 0) return 250000
+  return Math.max(MIN_INPUT_CHARS, Math.floor(window * INPUT_WINDOW_SHARE * CHARS_PER_TOKEN))
+}
+
+/**
+ * Derive the reply budget from the live context window.
+ *
+ * There is no point asking for more output than the request left room for: the
+ * provider rejects it, and a summary larger than the window could not be sent
+ * back anyway. A quarter of the window is generous for summaries while leaving
+ * the rest for input.
+ *
+ * @param {number | null | undefined} window - context window in tokens.
+ * @param {number | null | undefined} configured - explicit override, if any.
+ * @returns {number} output tokens per call.
+ */
+export function deriveOutputBudget(window, configured) {
+  if (Number.isFinite(configured) && configured > 0) return Math.min(MAX_OUTPUT_TOKENS, configured)
+  if (!Number.isFinite(window) || window <= 0) return 16000
+  return Math.min(MAX_OUTPUT_TOKENS, Math.max(MIN_OUTPUT_TOKENS, Math.floor(window * OUTPUT_WINDOW_SHARE)))
 }
 
 /**
@@ -781,7 +845,6 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   const intervals = findTurnIntervals(session)
   const keepLast = Number.isFinite(policy.keepLast) ? Math.max(0, Math.trunc(policy.keepLast)) : 2
   const minChars = Number.isFinite(policy.minChars) ? policy.minChars : 2000
-  const maxInput = Number.isFinite(policy.maxInputChars) ? policy.maxInputChars : 96000
   // Ratio of the middle the summary may occupy. Empty / 0 means unlimited.
   const ratio = Number.isFinite(policy.summaryRatio) && policy.summaryRatio > 0
     ? Math.min(1, policy.summaryRatio)
@@ -789,18 +852,25 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
   // A pass shorter than a minute cannot finish even one batch on a slow route,
   // so a tiny value would mean "never make progress". Clamped, not rejected: the
   // config editor writes whatever the panel sends.
-  const budgetMs = Math.max(60000, Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 180000)
+  const budgetMs = Math.max(60000, Number.isFinite(policy.maxPassMs) ? policy.maxPassMs : 600000)
 
   // Oldest first, and never the most recent `keepLast` turns: those are the
   // live working set.
   const eligible = intervals.slice(0, Math.max(0, intervals.length - keepLast))
 
   const routed = session.requestContext?.() ?? {}
+  // Both budgets default to "derive from the window". The window is what the route
+  // can actually accept, so deriving beats a constant that goes stale as models
+  // change.
+  const window = routed.contextWindow
+  const maxInput = deriveInputBudget(window, policy.maxInputChars)
+  const maxTokens = deriveOutputBudget(window, policy.maxTokens)
+
   const modelCfg = {
     provider: policy.provider || routed.provider || '',
     model: policy.model || routed.model || '',
     prompt: policy.prompt || DEFAULT_TURN_PROMPT,
-    maxTokens: Number.isFinite(policy.maxTokens) ? policy.maxTokens : 4000,
+    maxTokens,
   }
 
   // Nothing to do for three different reasons, and they used to look identical

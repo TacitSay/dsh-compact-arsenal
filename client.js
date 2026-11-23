@@ -332,7 +332,7 @@ window.__ModuleLoader__.load({
       enabled: true,
       archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 250000, maxPassMs: 600000, provider: '', model: '', prompt: '', maxTokens: 16000 },
+      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: null, maxPassMs: 600000, provider: '', model: '', prompt: '', maxTokens: null },
       total: { enabled: false, pressureRatio: 0.85, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
       tools: { enabled: false, pressureRatio: 0.6, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
@@ -602,21 +602,43 @@ window.__ModuleLoader__.load({
               gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
             },
           }, [
-            h(Field, { key: 'in', label: '单次输入上限', hint: '每批送给模型的最大字符数' },
+            h(Field, { key: 'in', label: '单次输入上限', hint: '留空 = 按上下文的 55% 自动' },
               h('input', {
-                type: 'number', value: String(config.turns.maxInputChars ?? 250000), min: 20000, step: 10000,
+                type: 'number',
+                value: config.turns.maxInputChars === null || config.turns.maxInputChars === undefined
+                  ? ''
+                  : String(config.turns.maxInputChars),
+                min: 20000, step: 10000,
+                placeholder: '自动',
                 onChange: (event) => {
-                  const next = Number(event.target.value)
-                  setSection('turns', 'maxInputChars', Number.isFinite(next) ? Math.max(20000, next) : 250000)
+                  const raw = event.target.value.trim()
+                  if (raw === '') {
+                    patch((cfg) => ({ ...cfg, turns: { ...cfg.turns, maxInputChars: null } }))
+                    return
+                  }
+                  const next = Number(raw)
+                  if (!Number.isFinite(next)) return
+                  setSection('turns', 'maxInputChars', Math.max(20000, next))
                 },
                 style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
               })),
-            h(Field, { key: 'out', label: '输出上限', hint: '单批回复的 token 数；超时会随之放大' },
+            h(Field, { key: 'out', label: '输出上限', hint: '留空 = 按上下文的 25% 自动；超时随之放大' },
               h('input', {
-                type: 'number', value: String(config.turns.maxTokens ?? 16000), min: 512, step: 1024,
+                type: 'number',
+                value: config.turns.maxTokens === null || config.turns.maxTokens === undefined
+                  ? ''
+                  : String(config.turns.maxTokens),
+                min: 512, step: 1024,
+                placeholder: '自动',
                 onChange: (event) => {
-                  const next = Number(event.target.value)
-                  setSection('turns', 'maxTokens', Number.isFinite(next) ? Math.max(512, next) : 16000)
+                  const raw = event.target.value.trim()
+                  if (raw === '') {
+                    patch((cfg) => ({ ...cfg, turns: { ...cfg.turns, maxTokens: null } }))
+                    return
+                  }
+                  const next = Number(raw)
+                  if (!Number.isFinite(next)) return
+                  setSection('turns', 'maxTokens', Math.max(512, next))
                 },
                 style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
               })),

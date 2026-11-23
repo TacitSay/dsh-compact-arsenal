@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { DEFAULTS } from '../index.js'
+import { DEFAULTS, deriveInputBudget, deriveOutputBudget } from '../index.js'
 
 const src = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 const sum = readFileSync(new URL('../lib/summarize.js', import.meta.url), 'utf8')
@@ -34,16 +34,30 @@ function SUMMARIZE_FLOOR_OK(text) {
   return /export const SUMMARIZE_TIMEOUT_MS = 45000/.test(text)
 }
 
-test('the defaults are sized for batching, not for one turn', () => {
-  // Measured: ~21,600 chars per turn, ~930 tokens per summary, ~105 tok/s output.
-  assert.equal(DEFAULTS.turns.maxInputChars, 250000, 'about 11 turns per call')
-  assert.equal(DEFAULTS.turns.maxTokens, 16000, 'about 17 summaries per call')
+test('both budgets default to auto, derived from the window', () => {
+  // A constant goes stale as models change; the window is what the route can
+  // actually accept.
+  assert.equal(DEFAULTS.turns.maxInputChars, null, 'input budget is derived')
+  assert.equal(DEFAULTS.turns.maxTokens, null, 'output budget is derived')
   assert.equal(DEFAULTS.turns.maxPassMs, 600000, 'ten minutes covers several batches')
 })
 
-test('a pass longer than its per-call timeout is coherent', () => {
-  // maxPassMs bounds the whole pass; one call inside it must be allowed to
-  // finish, or every pass ends mid-batch.
-  assert.ok(DEFAULTS.turns.maxPassMs > 0)
-  assert.ok(DEFAULTS.turns.maxTokens > 0)
+test('an explicit value still wins over the derived one', () => {
+  assert.equal(deriveInputBudget(1000000, 500000), 500000)
+  assert.equal(deriveOutputBudget(1000000, 60000), 60000)
+})
+
+test('a 1M window derives a budget that fits inside it', () => {
+  const input = deriveInputBudget(1000000, null)
+  const output = deriveOutputBudget(1000000, null)
+  // input chars -> tokens, plus output, must leave headroom in the window.
+  const inputTokens = input / 1.5
+  assert.ok(inputTokens + output < 1000000, 'input + output must fit the window')
+  assert.ok(inputTokens > 100000, 'and be large enough to batch several turns')
+})
+
+test('the derived output budget is clamped below the provider ceiling', () => {
+  // A 1M route can advertise ~393,216 max output; asking beyond it is rejected.
+  assert.ok(deriveOutputBudget(4000000, null) <= 200000)
+  assert.equal(deriveOutputBudget(1000000, 393216), 200000, 'an explicit over-ceiling value is clamped')
 })

@@ -16,6 +16,37 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.16.0] — 2026-11-23
+
+### Changed
+
+- **Both batch budgets are now derived from the live context window.** A constant
+  goes stale the moment the model changes, and the window is what the route can
+  actually accept. `maxInputChars` and `maxTokens` default to `null`, which means:
+
+  | window | input budget (55%) | output budget (25%) |
+  |---|---|---|
+  | 1M tokens | 825,000 chars | 200,000 tokens |
+  | 128K tokens | 108,134 chars | 32,768 tokens |
+  | unknown | 250,000 chars | 16,000 tokens |
+
+  Reserving 45% for the reply, instruction and provider overhead is what makes a
+  large batch safe rather than merely large.
+
+- **The output budget is clamped below the provider ceiling.** A 1M route can
+  advertise ~393,216 max output; asking for more is rejected, so the derived value
+  never exceeds 200,000 and an explicit larger value is clamped rather than passed
+  through to fail.
+
+- **The panel shows both fields as 留空 = 自动** with the actual share in the hint,
+  so the derivation is visible instead of magic.
+
+### Added
+
+- `deriveInputBudget()` and `deriveOutputBudget()` are exported and tested: the
+  window drives them, an explicit value overrides, and the floors keep a small
+  window usable.
+
 ## [0.15.0] — 2026-11-22
 
 ### Fixed

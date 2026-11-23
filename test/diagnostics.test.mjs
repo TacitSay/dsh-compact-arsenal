@@ -16,15 +16,15 @@ const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 test('the code default for the batch budget matches what makes batching worthwhile', () => {
   // Measured: turn transcripts average ~21,600 chars, so 24,000 fits one turn and
   // batching saves nothing. 96,000 fits about three.
-  assert.equal(DEFAULTS.turns.maxInputChars, 250000)
-  assert.equal(DEFAULTS.turns.maxTokens, 16000, 'a batch reply needs room for several records')
+  assert.equal(DEFAULTS.turns.maxInputChars, null)
+  assert.equal(DEFAULTS.turns.maxTokens, null, 'derived from the window')
 })
 
 test('the runtime fallback matches the default, not the old value', () => {
   // A mismatch here is invisible: the saved config wins, and every fallback path
   // silently uses the stale number.
-  assert.match(src, /Number\.isFinite\(policy\.maxInputChars\) \? policy\.maxInputChars : 96000/, 'input fallback')
-  assert.match(src, /Number\.isFinite\(policy\.maxTokens\) \? policy\.maxTokens : 4000/, 'token fallback')
+  assert.match(src, /deriveInputBudget\(window, policy\.maxInputChars\)/, 'input budget is derived')
+  assert.match(src, /deriveOutputBudget\(window, policy\.maxTokens\)/, 'output budget is derived')
 })
 
 test('keepLast doing nothing is reported, not silent', () => {
