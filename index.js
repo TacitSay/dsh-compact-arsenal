@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.17.2'
+export const PACKAGE_VERSION = '0.17.3'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -429,6 +429,14 @@ export function apply(ctx, rawConfig) {
 
   /** Last turn already processed, per session, so one turn is rewritten at most once. */
   const lastProcessedTurn = new Map()
+  /**
+   * Last measured usage per session, plus whether our own pass ran that turn.
+   *
+   * Without this, a drop between two `gate` lines is unattributable: the log shows
+   * a size, then a smaller size, and nothing says whether this plugin caused it or
+   * whether DSH's own compaction did. That ambiguity cost a real debugging session.
+   */
+  const lastSeen = new Map()
   // `turns` is declared here rather than added lazily: a counter that appears
   // only after the first successful pass reads as undefined on a fresh start,
   // and the panel would show nothing for it.
@@ -1312,19 +1320,49 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
 
   // Record the gate arithmetic once per turn: when a pass does not run, this is
   // the only place that says which condition held it back.
+  const used = snapshot.used ?? snapshot.estimated
+  const prev = lastSeen.get(session.id)
+  const delta = prev === undefined ? undefined : used - prev.used
+
+  /**
+   * Attribute a size change between two turns.
+   *
+   * Three cases are worth telling apart, and the log previously could not:
+   *   - we compressed last turn      -> `by: 'compact-arsenal'`
+   *   - it shrank and we did nothing -> `by: 'external'` (DSH's own compaction,
+   *     a rewind, or a provider-side change)
+   *   - it grew                      -> `by: 'conversation'`
+   *
+   * A drop of a few thousand tokens is just normal drift; only a substantial one
+   * is worth naming.
+   */
+  const CHANGE_THRESHOLD = 5000
+  let attribution
+  if (delta !== undefined && Math.abs(delta) >= CHANGE_THRESHOLD) {
+    if (delta < 0) attribution = prev?.didCompress === true ? 'compact-arsenal' : 'external'
+    else attribution = 'conversation'
+  }
+
   const gate = {
     turn: payload.turn,
     session: session.id,
     title: sessionTitleOf(session),
-    used: snapshot.used ?? snapshot.estimated,
+    used,
     window: pressure.window ?? undefined,
   }
   void logLine('info', 'gate', {
     ...gate,
+    // Only emitted when it moves meaningfully, so an ordinary turn stays one line.
+    ...(delta === undefined || Math.abs(delta) < CHANGE_THRESHOLD
+      ? {}
+      : { prev: prev.used, delta, by: attribution }),
     total: config.total.enabled ? rate(snapshot, pressure.window) >= config.total.pressureRatio : 'off',
     reasoning: config.reasoning.enabled ? rate(snapshot, pressure.window) >= config.reasoning.pressureRatio : 'off',
     tools: config.tools.enabled ? rate(snapshot, pressure.window) >= config.tools.pressureRatio : 'off',
   })
+
+  // Assume we did not compress; the passes below flip this if one lands.
+  lastSeen.set(session.id, { used, didCompress: false })
 
   // Total runs LAST (see the cascade below): it rewrites whole turns, so every
   // cheaper pass gets a chance to relieve the pressure first.
@@ -1411,6 +1449,12 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
     stats.failed += saved.failed ?? 0
     stats.chars += saved.chars
     stats.archived += saved.archived ?? 0
+    // Mark the session so the NEXT gate line can say who shrank it. Without this
+    // the next turn shows a smaller size and no explanation.
+    if (saved.items > 0) {
+      const seen = lastSeen.get(session.id)
+      if (seen !== undefined) lastSeen.set(session.id, { ...seen, didCompress: true })
+    }
     void logLine('info', 'turns pass', {
       items: saved.items,
       chars: saved.chars,

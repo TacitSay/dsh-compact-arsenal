@@ -16,6 +16,30 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.17.3] — 2026-11-23
+
+### Added
+
+- **The gate line now names who changed the context size.** A real case: usage fell
+  from 667,886 to 570,210 between two turns, both lines said `cascade skip`, and
+  there was no way to tell whether this plugin or DSH's own compaction caused it —
+  the answer took a manual dig through the whole log to establish. It now appears
+  inline:
+
+  ```
+  gate turn=113 used=570210 prev=667886 delta=-97676 by=external
+  ```
+
+  `by` is one of `compact-arsenal` (our pass landed last turn), `external` (it shrank
+  and we did nothing — DSH's compaction, a rewind, or the provider), or
+  `conversation` (it grew). Changes under 5,000 tokens are ordinary drift and are
+  not reported, so an ordinary turn stays a single line.
+
+### Added (tests)
+
+- `test/attribution.test.mjs`: all five attribution cases, plus that the per-session
+  state resets each turn and flips only when a pass actually lands.
+
 ## [0.17.2] — 2026-11-23
 
 ### Fixed
