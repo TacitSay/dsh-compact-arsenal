@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.14.0'
+export const PACKAGE_VERSION = '0.15.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -141,11 +141,11 @@ export const DEFAULTS = Object.freeze({
      * 24,000 budget fits roughly ONE turn per call — batching then saves almost
      * nothing. At 96,000 the same 26 turns take 8 calls instead of 26.
      *
-     * The ceiling is the model's context window: on a 1M-token route (~400K chars
-     * of usable input) 96,000 leaves ample room for the reply and the instruction.
-     * A smaller-window model needs this lowered.
+     * The ceiling is the model's context window: on a 1M-token route (~1.35M chars
+     * of usable input) this leaves ample room. Raise it toward 1,200,000 to fit a
+     * whole session in one call; a smaller-window model needs it lowered.
      */
-    maxInputChars: 96000,
+    maxInputChars: 250000,
     /**
      * The only brake on a pass. A turn-count cap used to live here too, but it
      * stopped a 180-second budget after 51 seconds — the budget is what a user
@@ -154,19 +154,20 @@ export const DEFAULTS = Object.freeze({
      * Enforced in minutes by the panel (60s minimum): a shorter budget cannot
      * finish even one batch, so the pass would never make progress.
      */
-    maxPassMs: 180000,
+    maxPassMs: 600000,
     provider: '',
     model: '',
     prompt: DEFAULT_TURN_PROMPT,
     /**
      * Reply budget for ONE batch, not one turn.
      *
-     * 1200 was sized for a single summary and would truncate a batch reply
-     * mid-JSON, which `parseSummaries` then rejects wholesale. At three turns per
-     * call and up to ~500 chars each, plus JSON punctuation, 4000 is comfortable;
-     * a batch that needs more simply produces shorter records.
+     * Measured throughput on this route is ~105 output tokens/sec, and one turn's
+     * summary runs ~1,400 chars (~930 tokens). 16,000 tokens therefore holds about
+     * 17 summaries — enough that a normal session finishes in a few batches, while
+     * staying far from the truncation cliff. The per-call timeout scales with this
+     * number, so a larger value does not simply time out.
      */
-    maxTokens: 4000,
+    maxTokens: 16000,
   },
   total: {
     enabled: false,
@@ -892,7 +893,10 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     try {
       summaries = await summarizeTurns(
         ctx,
-        { ...modelCfg, summaryRatio: ratio },
+        // `maxInputChars` must travel with the config: `summarize` truncates to
+        // it, and without it the batch would be cut back to the 12,000-char
+        // default after the grouping above already decided how much to send.
+        { ...modelCfg, summaryRatio: ratio, maxInputChars: maxInput },
         batch.map((item) => item.input),
         signal,
       )

@@ -21,7 +21,7 @@ test('the time budget cannot be set below a minute', () => {
   // Under a minute a slow route cannot finish even one batch, so the pass would
   // never make progress no matter how often it ran.
   assert.match(src, /Math\.max\(60000, Number\.isFinite\(policy\.maxPassMs\)/, 'clamped at 60s')
-  assert.equal(DEFAULTS.turns.maxPassMs, 180000, 'default is three minutes')
+  assert.equal(DEFAULTS.turns.maxPassMs, 600000, 'default is ten minutes')
 })
 
 test('turns are grouped into batches by total characters', () => {

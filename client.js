@@ -332,7 +332,7 @@ window.__ModuleLoader__.load({
       enabled: true,
       archiveEnabled: true,
       trigger: { pressureRatio: 0.75, runWithoutWindow: false },
-      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 96000, maxPassMs: 180000, provider: '', model: '', prompt: '', maxTokens: 4000 },
+      turns: { enabled: false, pressureRatio: 0.7, minChars: 2000, keepLast: 2, summaryRatio: null, maxInputChars: 250000, maxPassMs: 600000, provider: '', model: '', prompt: '', maxTokens: 16000 },
       total: { enabled: false, pressureRatio: 0.85, thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 65536, retainTurns: 2, maxInputChars: 60000, provider: '', model: '', prompt: '' },
       reasoning: { enabled: false, pressureRatio: 0.75, mode: 'truncate', keepLast: 3, minTotalChars: 15000, minChars: 200, headChars: 600, tailChars: 300, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, model: { ...MODEL_DEFAULT } },
       tools: { enabled: false, pressureRatio: 0.6, mode: 'truncate', thresholdChars: 8192, minTotalChars: 15000, minChars: 200, headChars: 4096, tailChars: 1024, keepLast: 2, batchChars: 12000, maxItems: 12, maxCharsPerPass: 40000, onlyTools: [], model: { ...MODEL_DEFAULT } },
@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
               },
             }),
           ]),
-          h(NumberField, { key: 't', label: '时间预算', value: Math.round((config.turns.maxPassMs ?? 180000) / 1000), min: 60, step: 30, suffix: '秒', onChange: (v) => setSection('turns', 'maxPassMs', Math.max(60, v) * 1000) }),
+          h(NumberField, { key: 't', label: '时间预算', value: Math.round((config.turns.maxPassMs ?? 600000) / 1000), min: 60, step: 30, suffix: '秒', onChange: (v) => setSection('turns', 'maxPassMs', Math.max(60, v) * 1000) }),
         ]),
         h(ModelPicker, {
           key: 'mp',
@@ -587,15 +587,41 @@ window.__ModuleLoader__.load({
             turns: { ...cfg.turns, provider: value.provider || '', model: value.model || '' },
           })),
         }),
-        h(Field, { key: 't', label: '输出上限', hint: '单次批量调用的回复 token 数' },
-          h('input', {
-            type: 'number', value: String(config.turns.maxTokens ?? 4000), min: 512, step: 512,
-            onChange: (event) => {
-              const next = Number(event.target.value)
-              setSection('turns', 'maxTokens', Number.isFinite(next) ? next : 4000)
+        h('details', {
+          key: 'adv',
+          style: { borderTop: `1px dashed ${LINE}`, paddingTop: 10 },
+        }, [
+          h('summary', {
+            key: 's',
+            style: { fontSize: 11, color: MUTED, cursor: 'pointer', userSelect: 'none' },
+          }, '高级'),
+          h('div', {
+            key: 'body',
+            style: {
+              display: 'grid', gap: 10, marginTop: 10,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
             },
-            style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
-          })),
+          }, [
+            h(Field, { key: 'in', label: '单次输入上限', hint: '每批送给模型的最大字符数' },
+              h('input', {
+                type: 'number', value: String(config.turns.maxInputChars ?? 250000), min: 20000, step: 10000,
+                onChange: (event) => {
+                  const next = Number(event.target.value)
+                  setSection('turns', 'maxInputChars', Number.isFinite(next) ? Math.max(20000, next) : 250000)
+                },
+                style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
+              })),
+            h(Field, { key: 'out', label: '输出上限', hint: '单批回复的 token 数；超时会随之放大' },
+              h('input', {
+                type: 'number', value: String(config.turns.maxTokens ?? 16000), min: 512, step: 1024,
+                onChange: (event) => {
+                  const next = Number(event.target.value)
+                  setSection('turns', 'maxTokens', Number.isFinite(next) ? Math.max(512, next) : 16000)
+                },
+                style: { ...controlStyle, fontVariantNumeric: 'tabular-nums' },
+              })),
+          ]),
+        ]),
         h(Field, { key: 'p', label: '压缩提示词', wide: true, hint: '描述这一轮「做法」的要点；用户原话不在输入里。' },
           h('textarea', {
             value: config.turns.prompt || '', rows: 4,

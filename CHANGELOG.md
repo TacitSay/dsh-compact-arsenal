@@ -16,6 +16,44 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.15.0] — 2026-11-22
+
+### Fixed
+
+- **The batching budget was silently truncated to 12,000 characters.** The pass
+  groupied turns up to `maxInputChars`, handed that to `summarize`, and `summarize`
+  cut it back to its own hard-coded 12,000-char cap — a constant that predates
+  batching. So every batch was really one 12,000-char request, and nothing logged
+  the loss. The cap now comes from the caller's budget.
+
+- **The per-call timeout made large batches impossible.** It was a fixed 45
+  seconds, sized for one summary. A batch allowed to emit 16,000 tokens needs
+  minutes at the measured ~105 tokens/sec, so it timed out every time. The timeout
+  now scales with the requested output (plus a 60-second slack), keeping 45 seconds
+  as the floor for small calls.
+
+### Changed
+
+- **Defaults sized for a 1M-token window:**
+
+  | setting | was | now | why |
+  |---|---|---|---|
+  | `maxInputChars` | 96,000 | 250,000 | ~11 turns per call |
+  | `maxTokens` | 4,000 | 16,000 | ~17 summaries per call |
+  | `maxPassMs` | 180,000 | 600,000 | several batches fit |
+
+- **The panel exposes the two sizing knobs** (`单次输入上限`, `输出上限`) under a
+  collapsed 高级 section, so the common controls stay uncluttered. The timeout is
+  not exposed: it derives from the output budget, and setting it independently is
+  how it got out of sync before.
+
+### Notes
+
+Measured throughput is ~105 output tokens/sec, so a whole-session pass costs the
+same wall-clock time whether it runs as one call or several — token generation is
+serial. Batching buys a per-call output cap that fits and a smaller blast radius,
+not speed. Raising both knobs toward a whole-session call is supported.
+
 ## [0.14.0] — 2026-11-22
 
 ### Fixed
