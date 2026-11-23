@@ -28,15 +28,52 @@ DSH 会话的历史越积越长。这个插件在上下文压力升高时，把*
 
 ## 快速开始
 
+三种装法，按你手上有什么选一种。
+
+### 一、从 npm 装（最省事）
+
 ```sh
 dsh plugin --profile <你的 profile> add dsh-compact-arsenal
 ```
 
-重启 DSH 后左栏出现「上下文压缩」图标。
+`<你的 profile>` 换成实际的 profile 名：桌面版通常是 `desktop`，`dsh web` 通常是 `web`。不确定就看你 `~/.dsh/profiles/` 下有哪些目录。
 
-**所有板块默认关闭。** 装上不改变任何行为。
+> ⚠️ **npm 上的版本落后于仓库。** 截至编写本 README，npm 最新为 `0.11.0`，而仓库已到 `0.17.2`。中间包含轮次压缩、批量调用、注入块判定等多项修复。想要当前功能，用下面两种方式。
 
-打开面板，开启「轮次压缩」，选一个压缩模型即可。
+### 二、从 GitHub 源码装（跟到最新）
+
+```sh
+dsh plugin --profile <你的 profile> add github:TacitSay/dsh-compact-arsenal
+```
+
+pnpm 会拉取仓库并构建。**这一步需要本机有 git 和网络访问 GitHub。**
+
+### 三、本地 clone 后链入（开发用，改完重启即生效）
+
+```sh
+git clone https://github.com/TacitSay/dsh-compact-arsenal.git
+dsh plugin --profile <你的 profile> add <clone 下来的绝对路径>
+```
+
+或者手动改 profile 的 `package.json`：
+
+```json
+{
+  "dependencies": {
+    "dsh-compact-arsenal": "link:C:/path/to/dsh-compact-arsenal"
+  }
+}
+```
+
+`link:` 形式下，**改完代码只要重启 DSH 就生效**，不用重装、不用发版。适合想自己改的人。
+
+> 装好后改完代码，用 `node scripts/deploy.mjs` 部署并验证——它会导入部署后的入口，确认真的能加载。手工拷文件漏过一个就会导致插件静默加载失败（复盘见 `docs/postmortem-injected-blocks.md`）。
+
+### 装完之后
+
+重启 DSH，左栏出现「上下文压缩」图标。
+
+**所有板块默认关闭**，装上不改变任何行为。打开面板，开启「轮次压缩」，选一个压缩模型即可。
 
 ---
 
