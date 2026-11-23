@@ -16,6 +16,34 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.17.1] — 2026-11-23
+
+### Fixed
+
+- **The sidebar icon disappeared because the plugin failed to load.** The installed
+  `lib/policy.js` was stale — it predated `SHORT_MARKER`, which `index.js` imports.
+  Node rejects that as a load-time `SyntaxError`, so the whole plugin never
+  registered and the panel slot was never filled. Nothing appeared in the log,
+  because logging lives inside the plugin that failed to start.
+
+  Root cause was the deploy step: files were copied by hand, one list at a time, and
+  `policy.js` was missed while `index.js` moved ahead of it.
+
+- **`tools` is now coerced off like `reasoning`.** Both are retired: the panel no
+  longer offers them, so a value left enabled by an older config could not be
+  turned off through the UI — and the `tools` path still carries the pre-batching
+  12,000-character truncation that silently cut batches.
+
+### Added
+
+- `scripts/deploy.mjs` — copies the source tree to the install, refuses to leave a
+  partial state, and **imports the deployed entry** before finishing. "In sync" and
+  "loads" are different questions, and only the second one decides whether the icon
+  appears. `--check` reports differences without copying.
+
+- `test/retired-sections.test.mjs` — pins that a retired section cannot be
+  re-enabled through config.
+
 ## [0.17.0] — 2026-11-23
 
 ### Changed

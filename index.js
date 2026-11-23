@@ -44,7 +44,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.17.0'
+export const PACKAGE_VERSION = '0.17.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -276,6 +276,10 @@ export function normalizeConfig(raw) {
   // `reasoning` on is coerced off: leaving it on would run both passes over the
   // same content and pay twice.
   reasoning.enabled = false
+  // Same for `tools`: the panel no longer offers it, so a value left on by an
+  // older config cannot be turned off through the UI. Its path also still carries
+  // the pre-batching 12,000-char truncation, which would silently cut batches.
+  tools.enabled = false
   return {
     enabled: input.enabled ?? DEFAULTS.enabled,
     archiveDir: typeof input.archiveDir === 'string' ? input.archiveDir : DEFAULTS.archiveDir,
