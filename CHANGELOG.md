@@ -16,6 +16,34 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.18.1] — 2026-11-24
+
+### Fixed
+
+- **Settings reverted on every restart.** `mergeConfig` in the panel deep-merged
+  `total`, `reasoning` and `tools` onto their defaults but not `turns` — the section
+  was added later and this function was never updated. A served config missing any
+  `turns` field therefore left the client holding an incomplete section, which it
+  posted straight back on the next edit; the server accepted it, and the value
+  reverted on the following read. One line fixes it, and a test pins all four
+  sections.
+
+- **The version badge read `v?` after the first save.** The `/config` response
+  omitted `version`, and the save handler overwrites every field it holds from that
+  response — so saving blanked the badge. `/state` and `/config` now return the same
+  field set; a test asserts both.
+
+- **A folded YAML prompt was corrupting the config file.** `total.prompt` had been
+  written as a double-quoted string spanning two lines with a trailing `\`. YAML
+  treats that as line continuation, so the stored value stopped round-tripping: each
+  parse produced a different string and the file became unreliable. The value is now
+  a single line.
+
+### Added (tests)
+
+- `test/config-roundtrip.test.mjs`: `turns` deep-merge with partial and absent
+  input, and that both responses carry every displayed field.
+
 ## [0.18.0] — 2026-11-24
 
 ### Added

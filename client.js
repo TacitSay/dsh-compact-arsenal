@@ -351,6 +351,11 @@ window.__ModuleLoader__.load({
         ...emptyConfig,
         ...input,
         trigger: section(emptyConfig.trigger, input.trigger),
+        // `turns` must be deep-merged like the rest. Dropping it here meant a
+        // served config missing any `turns` field left the client holding an
+        // incomplete section, which it posted straight back — and the value
+        // silently reverted on the next read.
+        turns: section(emptyConfig.turns, input.turns),
         total: section(emptyConfig.total, input.total),
         reasoning: {
           ...section(emptyConfig.reasoning, input.reasoning),

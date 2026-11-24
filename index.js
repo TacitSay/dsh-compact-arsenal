@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.18.0'
+export const PACKAGE_VERSION = '0.18.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -793,8 +793,13 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
     }
     const totalApplied = await applyTotal(configEditor, next.total)
     send(res, 200, {
+      // The panel updates every field it holds from this response, so anything it
+      // displays must be present here too — otherwise a save blanks the field it
+      // was showing (the version badge read `v?` after the first save).
+      version: PACKAGE_VERSION,
       config: next,
       stats,
+      totals,
       editable: true,
       totalApplied,
       lastFailure,
