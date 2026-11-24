@@ -16,6 +16,32 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.18.2] — 2026-11-24
+
+### Fixed
+
+- **The panel received nothing because both routes threw on every request.**
+  `registerPanelRoutes` used `totals` and `totalsReady` but never received them —
+  they live in `apply`, and that function does not close over its locals. Every call
+  to `/state` raised `ReferenceError: totals is not defined`, so the panel showed
+  `v?` and `(解析中…)`; `/config` failed the same way, which is what surfaced as
+  `保存失败：400`.
+
+  A missing-data symptom for a crash, and no test had ever *called* a handler — only
+  read its source. `test/panel-routes.test.mjs` now mounts the plugin against a stub
+  context and invokes both routes, asserting status and field presence.
+
+- `totalsReady` is passed as a getter. The lifetime figures load asynchronously
+  after mount, so a captured boolean would report `false` forever.
+
+### Notes
+
+Two earlier fixes in this series were correct but invisible, because the running
+process had not reloaded and `node_modules` was a copy whose dependency was pinned
+to `0.9.0` — so the next install would have reverted it. The profile now uses
+`link:` with a symlinked `node_modules`, meaning a restart is sufficient and an
+install cannot overwrite local work.
+
 ## [0.18.1] — 2026-11-24
 
 ### Fixed

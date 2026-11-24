@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.18.1'
+export const PACKAGE_VERSION = '0.18.2'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -510,7 +510,7 @@ export function apply(ctx, rawConfig) {
 
   // The panel needs a read/write channel, so these routes exist even while the
   // plugin is switched off: that is how it gets switched back on.
-  registerPanelRoutes(ctx, config, stats, archive, pressure)
+  registerPanelRoutes(ctx, config, stats, totals, () => totalsReady, archive, pressure)
 }
 
 /** Route prefix owned by this plugin. */
@@ -545,7 +545,23 @@ function explorerCommand(target) {
  * @param {any} config - the config this instance mounted with.
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
  */
-function registerPanelRoutes(ctx, config, stats, archive, pressure) {
+/**
+ * Register the panel's routes.
+ *
+ * Every value the panel displays must be passed in: this function is called from
+ * `apply` but does not close over its locals, so a name used here and not passed
+ * is a `ReferenceError` at request time — which is invisible until someone opens
+ * the panel, and looks like "no data" rather than "a crash".
+ *
+ * @param {any} ctx - plugin context.
+ * @param {any} config - normalized config.
+ * @param {any} stats - per-process counters.
+ * @param {any} totals - lifetime counters, mutated in place by the passes.
+ * @param {() => boolean} totalsReady - whether the lifetime figures have loaded.
+ * @param {{ root: string, lastPath: string | null }} archive - archive target.
+ * @param {any} pressure - last observed pressure inputs.
+ */
+function registerPanelRoutes(ctx, config, stats, totals, totalsReady, archive, pressure) {
   const webServer = ctx.get('webServer')
   const configEditor = ctx.get('configEditor')
   if (webServer === undefined) return
@@ -759,7 +775,9 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
       // Lifetime figures from stats.json, so the panel can distinguish "nothing has
       // happened since the restart" from "nothing has ever happened".
       totals,
-      totalsReady,
+      // A getter, not a snapshot: the load is async, so a value captured at mount
+      // would report false forever.
+      totalsReady: totalsReady(),
       editable: configEditor !== undefined,
       lastFailure,
       archiveRoot: archive.root,
