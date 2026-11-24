@@ -52,6 +52,6 @@ test('the stats object declares turns rather than adding it lazily', () => {
 })
 
 test('the panel reports successes, not only failures', () => {
-  assert.match(client, /已压缩 \$\{stats\.turns\} 轮/, 'turn count is shown')
-  assert.match(client, /共省下 \$\{stats\.chars\.toLocaleString\(\)\} 字符/, 'saved characters are shown')
+  assert.match(client, /压缩 \$\{stats\.turns\} 轮/, 'turn count is shown')
+  assert.match(client, /省下 \$\{stats\.chars\.toLocaleString\(\)\} 字符/, 'saved characters are shown')
 })

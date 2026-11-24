@@ -16,6 +16,43 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.18.0] — 2026-11-24
+
+### Added
+
+- **Lifetime counters, persisted to `stats.json`.** The panel's figures were a plain
+  in-memory object, so every restart showed zero — and "0 次" is indistinguishable
+  from "this plugin has never done anything". The panel now shows two lines:
+
+  ```
+  本次：压缩 12 轮 · 省下 487,501 字符
+  累计：压缩 96 轮 · 省下 3,204,118 字符 · 归档 96 份 · 自 2026-11-24
+  ```
+
+  Process counters still reset on restart (they answer "since I last restarted");
+  the lifetime line answers the question a bare zero used to raise.
+
+- The store also records what was never tracked: `passes` (successful passes) and
+  `since` / `updatedAt` timestamps. Turn compression is counted separately from the
+  retired `tools` / `reasoning` fields, so old totals still read.
+
+### Notes on the write path
+
+- **One write per pass, not per item.** A pass is the unit a user cares about, and
+  writing per item would hammer the disk for no extra information.
+- **Temp file plus rename**, so a crash mid-write leaves the previous file intact
+  rather than a half-parsed JSON.
+- **Every failure is swallowed.** A counter that cannot be written must never break
+  a compression that already succeeded; the archive remains the source of truth.
+- **Loaded asynchronously**, because `apply` is synchronous and blocking a plugin
+  mount on a file read would delay every other plugin.
+
+### Added (tests)
+
+- `test/stats-persistence.test.mjs`: round-trip, accumulation, stable `since`,
+  corrupt-file degradation, unknown-key rejection, one write site, and that the
+  panel names both lines.
+
 ## [0.17.3] — 2026-11-23
 
 ### Added

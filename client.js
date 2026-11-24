@@ -372,6 +372,8 @@ window.__ModuleLoader__.load({
       const [lastFailure, setLastFailure] = useState(null)
       const [archiveRoot, setArchiveRoot] = useState(null)
       const [logRoot, setLogRoot] = useState(null)
+      /** Lifetime counters from stats.json; null until the first load. */
+      const [totals, setTotals] = useState(null)
       const [openError, setOpenError] = useState(null)
       const [openState, setOpenState] = useState('idle')
       const [lastArchivePath, setLastArchivePath] = useState(null)
@@ -397,6 +399,7 @@ window.__ModuleLoader__.load({
             setLastFailure(body.lastFailure ?? null)
             setArchiveRoot(body.archiveRoot ?? null)
             setLogRoot(body.logRoot ?? null)
+            if (body.totals) setTotals(body.totals)
             setLastArchivePath(body.lastArchivePath ?? null)
             setPressure(body.pressure ?? null)
             setRuntimeVersion(body.version ?? null)
@@ -452,6 +455,7 @@ window.__ModuleLoader__.load({
               setLastFailure(body.lastFailure ?? null)
               if (body.archiveRoot) setArchiveRoot(body.archiveRoot)
               if (body.logRoot) setLogRoot(body.logRoot)
+              if (body.totals) setTotals(body.totals)
               if (body.lastArchivePath !== undefined) setLastArchivePath(body.lastArchivePath)
               if (body.pressure !== undefined) setPressure(body.pressure)
               if (body.version) setRuntimeVersion(body.version)
@@ -741,15 +745,20 @@ window.__ModuleLoader__.load({
             key: 'off',
             style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 },
           }, '总开关已关闭：三个板块都不会执行。'),
-        // Success totals were not shown at all: only failures and the archive
-        // count appeared, so a working pass looked identical to an idle one.
+        // Two lines, because they answer different questions and used to be one.
+        // Process counters reset on restart; without the lifetime line a fresh
+        // start reads "0" whether or not the plugin has ever done anything.
         stats.turns > 0 || stats.chars > 0
           ? h('p', { key: 'done', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
-            [
-              stats.turns > 0 ? `已压缩 ${stats.turns} 轮` : null,
+            `本次：${[
+              stats.turns > 0 ? `压缩 ${stats.turns} 轮` : null,
               stats.tools > 0 ? `工具剪枝 ${stats.tools} 处` : null,
-              stats.chars > 0 ? `共省下 ${stats.chars.toLocaleString()} 字符` : null,
-            ].filter(Boolean).join(' · '))
+              stats.chars > 0 ? `省下 ${stats.chars.toLocaleString()} 字符` : null,
+            ].filter(Boolean).join(' · ')}`)
+          : null,
+        totals !== null && totals !== undefined && totals.since !== null
+          ? h('p', { key: 'total', style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.6 } },
+            `累计：压缩 ${totals.turns ?? 0} 轮 · 省下 ${(totals.chars ?? 0).toLocaleString()} 字符 · 归档 ${totals.archived ?? 0} 份 · 自 ${totals.since.slice(0, 10)}`)
           : null,
         stats.failed > 0
           ? h('p', { key: 'fail', style: { margin: 0, fontSize: 11, color: WARN, lineHeight: 1.6 } },

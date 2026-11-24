@@ -30,6 +30,7 @@ import { join } from 'node:path'
 import { summarize, summarizeBatch, summarizeTurns } from './lib/summarize.js'
 import { archiveRewrite, archiveRoot } from './lib/archive.js'
 import { logLine, logRoot } from './lib/log.js'
+import { addTotals, readTotals } from './lib/stats.js'
 import {
   findTurnIntervals,
   frameSummary,
@@ -44,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.17.3'
+export const PACKAGE_VERSION = '0.18.0'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -440,7 +441,28 @@ export function apply(ctx, rawConfig) {
   // `turns` is declared here rather than added lazily: a counter that appears
   // only after the first successful pass reads as undefined on a fresh start,
   // and the panel would show nothing for it.
+  //
+  // These are the CURRENT PROCESS counters, reset on every restart by design (they
+  // answer "what did the plugin do since I last restarted"). Cumulative figures
+  // live in `totals`, loaded from disk below.
   const stats = { reasoning: 0, tools: 0, turns: 0, chars: 0, failed: 0, archived: 0 }
+  /**
+   * Lifetime counters, loaded from `stats.json` right after mount.
+   *
+   * Process counters reset on restart and cannot answer "has this ever worked?" —
+   * which is exactly the question a panel showing "0 次" invites. These persist,
+   * and are updated once per pass rather than once per item.
+   *
+   * Loaded asynchronously because `apply` is synchronous: blocking a plugin mount
+   * on a file read would delay every other plugin, and a missing file is normal on
+   * a first install.
+   */
+  const totals = { turns: 0, tools: 0, reasoning: 0, chars: 0, archived: 0, failed: 0, passes: 0, since: null, updatedAt: null }
+  let totalsReady = false
+  void readTotals().then((loaded) => {
+    Object.assign(totals, loaded)
+    totalsReady = true
+  }).catch(() => {})
   /**
    * Last observed pressure inputs, so the panel can show both the provider's
    * number and the heuristic estimate that the gate falls back to.
@@ -734,6 +756,10 @@ function registerPanelRoutes(ctx, config, stats, archive, pressure) {
       version: PACKAGE_VERSION,
       config,
       stats,
+      // Lifetime figures from stats.json, so the panel can distinguish "nothing has
+      // happened since the restart" from "nothing has ever happened".
+      totals,
+      totalsReady,
       editable: configEditor !== undefined,
       lastFailure,
       archiveRoot: archive.root,
@@ -1460,6 +1486,19 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
       chars: saved.chars,
       failed: saved.failed ?? 0,
     })
+    // One write per pass, not per item: a pass is the unit a user cares about and
+    // writing per item would hammer the disk for no extra information.
+    if (saved.items > 0 || (saved.failed ?? 0) > 0) {
+      void addTotals({
+        turns: saved.items,
+        chars: saved.chars,
+        archived: saved.archived ?? 0,
+        failed: saved.failed ?? 0,
+        passes: saved.items > 0 ? 1 : 0,
+      }).then((next) => {
+        if (next !== null) Object.assign(totals, next)
+      })
+    }
   } else if (config.turns.enabled) {
     void logLine('info', 'cascade skip', { section: 'turns', reason: 'below threshold' })
   }
