@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.18.2'
+export const PACKAGE_VERSION = '0.18.3'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -580,42 +580,6 @@ function registerPanelRoutes(ctx, config, stats, totals, totalsReady, archive, p
    * Read from the live `llm` registry rather than a stored copy: a route appears
    * here exactly when the Harness could actually route a request to it.
    */
-  /**
-   * TEMPORARY experiment route — removed after the comparison run.
-   *
-   * Runs the plugin's own `summarize()` against a caller-supplied prompt, so the
-   * comparison measures the prompt rather than a hand-built HTTP client.
-   */
-  route(`${API_PREFIX}/experiment`, async (req, res) => {
-    if (req.method !== 'POST') return send(res, 405, { error: 'method-not-allowed' })
-    let body = ''
-    for await (const chunk of req) body += chunk
-    let payload
-    try {
-      payload = JSON.parse(body)
-    } catch {
-      return send(res, 400, { error: 'invalid-json' })
-    }
-    const llm = ctx.get('llm')
-    if (llm === undefined) return send(res, 503, { error: 'llm-unavailable' })
-
-    const provider = payload.provider || 'ark-plan'
-    const model = payload.model || 'deepseek-v4-1-flash-economy-261017'
-    const started = Date.now()
-    try {
-      // Import here so the experiment cannot affect normal load.
-      const { summarize } = await import('./lib/summarize.js')
-      const reply = await summarize(
-        ctx,
-        { provider, model, prompt: payload.system, maxTokens: payload.maxTokens ?? 900 },
-        payload.user,
-        undefined,
-      )
-      send(res, 200, { ok: true, reply, elapsedMs: Date.now() - started })
-    } catch (error) {
-      send(res, 500, { ok: false, error: String(error?.message ?? error), elapsedMs: Date.now() - started })
-    }
-  })
 
   route(`${API_PREFIX}/models`, async (req, res) => {
     if (req.method !== 'GET') return send(res, 405, { error: 'method-not-allowed' })

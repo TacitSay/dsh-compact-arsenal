@@ -16,6 +16,33 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.18.3] — 2026-11-24
+
+### Removed
+
+- **The temporary `/experiment` route is gone.** It was added for a prompt
+  comparison, labelled `TEMPORARY — removed after the comparison run`, and then
+  left in place. It ran `summarize()` against a caller-supplied prompt with no
+  authentication, so anything able to reach the panel could spend the user's model
+  quota through it. The comparison it served is finished; nothing depends on it.
+
+### Audited
+
+Every route was invoked against a stub context, not merely read:
+
+| route | result |
+|---|---|
+| `GET /state` | 200, all fields present |
+| `POST /config` | 200, config echoed |
+| `GET /update-check` | 200 |
+| `GET /models` | 503 — degrades when `llm` is absent, by design |
+| `POST /open-archive` | 503 — degrades when `subprocess` is absent |
+
+Also verified live: archive path derivation (`<plugin>/archive`, fallback under
+`$DSH_HOME`), marker idempotence (`·` matches itself, prose containing `·` does
+not), filename sanitising (`/ : * ? " < > |` all replaced), and that the client's
+`emptyConfig` keys match the server's `DEFAULTS.turns` exactly.
+
 ## [0.18.2] — 2026-11-24
 
 ### Fixed
