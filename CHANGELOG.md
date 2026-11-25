@@ -16,6 +16,45 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.19.0] — 2026-11-25
+
+### Fixed
+
+- **Data would have been destroyed for anyone installing from npm.** The archive,
+  log and counters were written next to the plugin, resolved from the module's own
+  URL. For a development checkout that is fine. For an npm install it means
+  `node_modules/dsh-compact-arsenal/`, which pnpm deletes and recreates on every
+  reinstall or update — a user's compression records would vanish with no error,
+  no warning, and no way to know they had ever existed.
+
+  The location now depends on where the plugin actually lives:
+
+  | install shape | archive / logs / stats |
+  |---|---|
+  | development checkout (no `node_modules` in the path) | `<plugin>/…` |
+  | installed from npm | `$DSH_HOME/compact-arsenal/…` |
+  | explicit `archiveDir` | that path, always |
+
+  `$DSH_HOME` is honoured when set, otherwise `~/.dsh` — the same convention the
+  Host uses, so a portable install keeps its data together.
+
+- The fallback location (used when the preferred one refuses a write) is now always
+  under `$DSH_HOME`. A read-only install directory is precisely the case where the
+  plugin tree cannot be trusted to keep anything.
+
+### Added
+
+- `test/install-paths.test.mjs`, including a test that **physically copies the
+  modules into a `node_modules` path** and imports them, because the decision reads
+  the module's own URL and cannot be faked from outside. It asserts nothing is
+  written inside `node_modules` for that shape.
+
+### Note on this machine
+
+Nothing changes locally: this checkout lives at
+`~/.dsh/plugins-data/dsh-compact-arsenal`, whose path contains no `node_modules`
+segment, so it keeps its records beside the source as before.
+
 ## [0.18.3] — 2026-11-24
 
 ### Removed
