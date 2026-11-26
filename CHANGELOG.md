@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
@@ -6,17 +6,51 @@ All notable changes to this project are documented here. The format follows
 
 Version numbers follow SemVer literally:
 
-- **Y (次版本)** goes up for a backward-compatible feature. Z resets to 0.
-- **Z (修订号)** goes up only for a backward-compatible fix. Several fixes may be
+- **Y (娆＄増鏈?** goes up for a backward-compatible feature. Z resets to 0.
+- **Z (淇鍙?** goes up only for a backward-compatible fix. Several fixes may be
   batched into one release; there is no rule that each commit gets its own.
-- **X (主版本)** would go up for an incompatible change — the plugin's public
+- **X (涓荤増鏈?** would go up for an incompatible change 鈥?the plugin's public
   surface is its config keys, its panel, and the files it writes.
 
 Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
-## [0.19.0] — 2026-11-25
+## [0.19.1] — 2026-11-26
+
+### Fixed
+
+Three defects of the same shape: a name used inside `rewriteAsync` that is only
+defined in `apply()`'s scope. None throws at import, each fails silently when
+that path runs, and the visible symptom is "the threshold was reached but
+nothing was compressed", with an empty log.
+
+- **The early-return gate never counted `turns`.** It read
+  `if (!total && !reasoning && !tools) return`, and those three are retired and
+  default to off — so the normal configuration returned on every turn and wrote
+  not a single log line.
+
+- **`lastSeen` was not passed into `rewriteAsync`.** The first measurement threw
+  `lastSeen is not defined`; the detached caller swallowed it into a logger
+  warning, so nothing surfaced.
+
+- **`totals` was not passed either.** Once the first two were fixed the path got
+  further and failed at the counter update with `totals is not defined`.
+
+### Added
+
+- `test/scope-safety.test.mjs`: pins all three, including a structural check that
+  `rewriteAsync` declares every `apply()` local it reads (comments stripped, so a
+  prose word cannot look like an identifier).
+- `test/turns-core.test.mjs`: interval detection, the closing reply staying
+  outside the condensed span, transcript content, and idempotence.
+
+### Note
+
+`0.19.0` shipped with these three defects, so it could not compress anything.
+`0.19.1` supersedes it.
+
+## [0.19.0] 鈥?2026-11-25
 
 ### Fixed
 
@@ -24,18 +58,18 @@ task.
   log and counters were written next to the plugin, resolved from the module's own
   URL. For a development checkout that is fine. For an npm install it means
   `node_modules/dsh-compact-arsenal/`, which pnpm deletes and recreates on every
-  reinstall or update — a user's compression records would vanish with no error,
+  reinstall or update 鈥?a user's compression records would vanish with no error,
   no warning, and no way to know they had ever existed.
 
   The location now depends on where the plugin actually lives:
 
   | install shape | archive / logs / stats |
   |---|---|
-  | development checkout (no `node_modules` in the path) | `<plugin>/…` |
-  | installed from npm | `$DSH_HOME/compact-arsenal/…` |
+  | development checkout (no `node_modules` in the path) | `<plugin>/鈥 |
+  | installed from npm | `$DSH_HOME/compact-arsenal/鈥 |
   | explicit `archiveDir` | that path, always |
 
-  `$DSH_HOME` is honoured when set, otherwise `~/.dsh` — the same convention the
+  `$DSH_HOME` is honoured when set, otherwise `~/.dsh` 鈥?the same convention the
   Host uses, so a portable install keeps its data together.
 
 - The fallback location (used when the preferred one refuses a write) is now always
@@ -55,12 +89,12 @@ Nothing changes locally: this checkout lives at
 `~/.dsh/plugins-data/dsh-compact-arsenal`, whose path contains no `node_modules`
 segment, so it keeps its records beside the source as before.
 
-## [0.18.3] — 2026-11-24
+## [0.18.3] 鈥?2026-11-24
 
 ### Removed
 
 - **The temporary `/experiment` route is gone.** It was added for a prompt
-  comparison, labelled `TEMPORARY — removed after the comparison run`, and then
+  comparison, labelled `TEMPORARY 鈥?removed after the comparison run`, and then
   left in place. It ran `summarize()` against a caller-supplied prompt with no
   authentication, so anything able to reach the panel could spend the user's model
   quota through it. The comparison it served is finished; nothing depends on it.
@@ -74,26 +108,25 @@ Every route was invoked against a stub context, not merely read:
 | `GET /state` | 200, all fields present |
 | `POST /config` | 200, config echoed |
 | `GET /update-check` | 200 |
-| `GET /models` | 503 — degrades when `llm` is absent, by design |
-| `POST /open-archive` | 503 — degrades when `subprocess` is absent |
+| `GET /models` | 503 鈥?degrades when `llm` is absent, by design |
+| `POST /open-archive` | 503 鈥?degrades when `subprocess` is absent |
 
 Also verified live: archive path derivation (`<plugin>/archive`, fallback under
-`$DSH_HOME`), marker idempotence (`·` matches itself, prose containing `·` does
+`$DSH_HOME`), marker idempotence (`路` matches itself, prose containing `路` does
 not), filename sanitising (`/ : * ? " < > |` all replaced), and that the client's
 `emptyConfig` keys match the server's `DEFAULTS.turns` exactly.
 
-## [0.18.2] — 2026-11-24
+## [0.18.2] 鈥?2026-11-24
 
 ### Fixed
 
 - **The panel received nothing because both routes threw on every request.**
-  `registerPanelRoutes` used `totals` and `totalsReady` but never received them —
-  they live in `apply`, and that function does not close over its locals. Every call
+  `registerPanelRoutes` used `totals` and `totalsReady` but never received them 鈥?  they live in `apply`, and that function does not close over its locals. Every call
   to `/state` raised `ReferenceError: totals is not defined`, so the panel showed
-  `v?` and `(解析中…)`; `/config` failed the same way, which is what surfaced as
-  `保存失败：400`.
+  `v?` and `(瑙ｆ瀽涓€?`; `/config` failed the same way, which is what surfaced as
+  `淇濆瓨澶辫触锛?00`.
 
-  A missing-data symptom for a crash, and no test had ever *called* a handler — only
+  A missing-data symptom for a crash, and no test had ever *called* a handler 鈥?only
   read its source. `test/panel-routes.test.mjs` now mounts the plugin against a stub
   context and invokes both routes, asserting status and field presence.
 
@@ -104,16 +137,16 @@ not), filename sanitising (`/ : * ? " < > |` all replaced), and that the client'
 
 Two earlier fixes in this series were correct but invisible, because the running
 process had not reloaded and `node_modules` was a copy whose dependency was pinned
-to `0.9.0` — so the next install would have reverted it. The profile now uses
+to `0.9.0` 鈥?so the next install would have reverted it. The profile now uses
 `link:` with a symlinked `node_modules`, meaning a restart is sufficient and an
 install cannot overwrite local work.
 
-## [0.18.1] — 2026-11-24
+## [0.18.1] 鈥?2026-11-24
 
 ### Fixed
 
 - **Settings reverted on every restart.** `mergeConfig` in the panel deep-merged
-  `total`, `reasoning` and `tools` onto their defaults but not `turns` — the section
+  `total`, `reasoning` and `tools` onto their defaults but not `turns` 鈥?the section
   was added later and this function was never updated. A served config missing any
   `turns` field therefore left the client holding an incomplete section, which it
   posted straight back on the next edit; the server accepted it, and the value
@@ -122,7 +155,7 @@ install cannot overwrite local work.
 
 - **The version badge read `v?` after the first save.** The `/config` response
   omitted `version`, and the save handler overwrites every field it holds from that
-  response — so saving blanked the badge. `/state` and `/config` now return the same
+  response 鈥?so saving blanked the badge. `/state` and `/config` now return the same
   field set; a test asserts both.
 
 - **A folded YAML prompt was corrupting the config file.** `total.prompt` had been
@@ -136,17 +169,17 @@ install cannot overwrite local work.
 - `test/config-roundtrip.test.mjs`: `turns` deep-merge with partial and absent
   input, and that both responses carry every displayed field.
 
-## [0.18.0] — 2026-11-24
+## [0.18.0] 鈥?2026-11-24
 
 ### Added
 
 - **Lifetime counters, persisted to `stats.json`.** The panel's figures were a plain
-  in-memory object, so every restart showed zero — and "0 次" is indistinguishable
+  in-memory object, so every restart showed zero 鈥?and "0 娆? is indistinguishable
   from "this plugin has never done anything". The panel now shows two lines:
 
   ```
-  本次：压缩 12 轮 · 省下 487,501 字符
-  累计：压缩 96 轮 · 省下 3,204,118 字符 · 归档 96 份 · 自 2026-11-24
+  鏈锛氬帇缂?12 杞?路 鐪佷笅 487,501 瀛楃
+  绱锛氬帇缂?96 杞?路 鐪佷笅 3,204,118 瀛楃 路 褰掓。 96 浠?路 鑷?2026-11-24
   ```
 
   Process counters still reset on restart (they answer "since I last restarted");
@@ -173,14 +206,13 @@ install cannot overwrite local work.
   corrupt-file degradation, unknown-key rejection, one write site, and that the
   panel names both lines.
 
-## [0.17.3] — 2026-11-23
+## [0.17.3] 鈥?2026-11-23
 
 ### Added
 
 - **The gate line now names who changed the context size.** A real case: usage fell
   from 667,886 to 570,210 between two turns, both lines said `cascade skip`, and
-  there was no way to tell whether this plugin or DSH's own compaction caused it —
-  the answer took a manual dig through the whole log to establish. It now appears
+  there was no way to tell whether this plugin or DSH's own compaction caused it 鈥?  the answer took a manual dig through the whole log to establish. It now appears
   inline:
 
   ```
@@ -188,7 +220,7 @@ install cannot overwrite local work.
   ```
 
   `by` is one of `compact-arsenal` (our pass landed last turn), `external` (it shrank
-  and we did nothing — DSH's compaction, a rewind, or the provider), or
+  and we did nothing 鈥?DSH's compaction, a rewind, or the provider), or
   `conversation` (it grew). Changes under 5,000 tokens are ordinary drift and are
   not reported, so an ordinary turn stays a single line.
 
@@ -197,7 +229,7 @@ install cannot overwrite local work.
 - `test/attribution.test.mjs`: all five attribution cases, plus that the per-session
   state resets each turn and flips only when a pass actually lands.
 
-## [0.17.2] — 2026-11-23
+## [0.17.2] 鈥?2026-11-23
 
 ### Fixed
 
@@ -207,28 +239,27 @@ install cannot overwrite local work.
   | source | count | who wrote it |
   |---|---|---|
   | `{kind:'user', rpcId, clientTimeZone}` | 109 | the human, via client RPC |
-  | `{kind:'user'}` | 197 | injected — DSH's compaction checkpoint, hindsight recall, our own old checkpoints |
+  | `{kind:'user'}` | 197 | injected 鈥?DSH's compaction checkpoint, hindsight recall, our own old checkpoints |
 
   An injected block would become a turn boundary, so the span between two
-  injections — which can hold many real instructions — was condensed into one
+  injections 鈥?which can hold many real instructions 鈥?was condensed into one
   summary. On the session that surfaced this, 71 genuine-looking messages ended up
   inside our replacement spans.
 
   The discriminator is `rpcId`: only a message delivered over the client RPC has
-  one. Tightening is deliberately conservative — if a real message ever lacks
+  one. Tightening is deliberately conservative 鈥?if a real message ever lacks
   `rpcId`, the cost is that we skip compressing that turn, not that we fold real
   instructions into a summary.
 
-  Verified on the real session: intervals found went 87 → 86, so compression keeps
+  Verified on the real session: intervals found went 87 鈫?86, so compression keeps
   working, and every interval now starts at a genuine instruction.
 
 - **The JSON parser lost whole batches to a greedy regex.** `String(raw).match(/\[[\s\S]*\]/)`
   matches from the first `[` to the LAST `]`, so a reply like
 
       [{"i":1,"s":"..."}]
-      注意：[重要] 已完成
-
-  produced an unparseable span and the batch was discarded — two 12-turn batches in
+      娉ㄦ剰锛歔閲嶈] 宸插畬鎴?
+  produced an unparseable span and the batch was discarded 鈥?two 12-turn batches in
   one pass, visible in the log as `turn-batch-parse-failed`.
 
   It now scans each `]` from the first `[` outward and takes the first prefix that
@@ -237,17 +268,17 @@ install cannot overwrite local work.
 
 ### Added
 
-- `test/instruction-detection.test.mjs` — injected blocks never start a turn; only
+- `test/instruction-detection.test.mjs` 鈥?injected blocks never start a turn; only
   a client message does.
-- `test/parse-robustness.test.mjs` — 10 cases covering the bracket patterns that
+- `test/parse-robustness.test.mjs` 鈥?10 cases covering the bracket patterns that
   real replies contain.
 
-## [0.17.1] — 2026-11-23
+## [0.17.1] 鈥?2026-11-23
 
 ### Fixed
 
 - **The sidebar icon disappeared because the plugin failed to load.** The installed
-  `lib/policy.js` was stale — it predated `SHORT_MARKER`, which `index.js` imports.
+  `lib/policy.js` was stale 鈥?it predated `SHORT_MARKER`, which `index.js` imports.
   Node rejects that as a load-time `SyntaxError`, so the whole plugin never
   registered and the panel slot was never filled. Nothing appeared in the log,
   because logging lives inside the plugin that failed to start.
@@ -257,20 +288,20 @@ install cannot overwrite local work.
 
 - **`tools` is now coerced off like `reasoning`.** Both are retired: the panel no
   longer offers them, so a value left enabled by an older config could not be
-  turned off through the UI — and the `tools` path still carries the pre-batching
+  turned off through the UI 鈥?and the `tools` path still carries the pre-batching
   12,000-character truncation that silently cut batches.
 
 ### Added
 
-- `scripts/deploy.mjs` — copies the source tree to the install, refuses to leave a
+- `scripts/deploy.mjs` 鈥?copies the source tree to the install, refuses to leave a
   partial state, and **imports the deployed entry** before finishing. "In sync" and
   "loads" are different questions, and only the second one decides whether the icon
   appears. `--check` reports differences without copying.
 
-- `test/retired-sections.test.mjs` — pins that a retired section cannot be
+- `test/retired-sections.test.mjs` 鈥?pins that a retired section cannot be
   re-enabled through config.
 
-## [0.17.0] — 2026-11-23
+## [0.17.0] 鈥?2026-11-23
 
 ### Changed
 
@@ -285,7 +316,7 @@ install cannot overwrite local work.
   The reply is the conclusion the process arrived at. A summary written without it
   has to guess where the work landed, which is how a record ends up disagreeing
   with the answer sitting directly below it on the surface. So the tail is appended
-  under a `[最终回复]` label, and the prompt tells the model it is context — to make
+  under a `[鏈€缁堝洖澶峕` label, and the prompt tells the model it is context 鈥?to make
   the record agree with it, not to copy it in.
 
   The replacement span is unchanged: `startSeq`/`endSeq` still cover only
@@ -295,11 +326,11 @@ install cannot overwrite local work.
 
 ### Added
 
-- `test/request-vs-replace.test.mjs`: pins the distinction — the tail is present
+- `test/request-vs-replace.test.mjs`: pins the distinction 鈥?the tail is present
   and labelled in the request, absent from the shadowed span, and the prompt
   forbids copying it into the summary.
 
-## [0.16.0] — 2026-11-23
+## [0.16.0] 鈥?2026-11-23
 
 ### Changed
 
@@ -321,7 +352,7 @@ install cannot overwrite local work.
   never exceeds 200,000 and an explicit larger value is clamped rather than passed
   through to fail.
 
-- **The panel shows both fields as 留空 = 自动** with the actual share in the hint,
+- **The panel shows both fields as 鐣欑┖ = 鑷姩** with the actual share in the hint,
   so the derivation is visible instead of magic.
 
 ### Added
@@ -330,13 +361,13 @@ install cannot overwrite local work.
   window drives them, an explicit value overrides, and the floors keep a small
   window usable.
 
-## [0.15.0] — 2026-11-22
+## [0.15.0] 鈥?2026-11-22
 
 ### Fixed
 
 - **The batching budget was silently truncated to 12,000 characters.** The pass
   groupied turns up to `maxInputChars`, handed that to `summarize`, and `summarize`
-  cut it back to its own hard-coded 12,000-char cap — a constant that predates
+  cut it back to its own hard-coded 12,000-char cap 鈥?a constant that predates
   batching. So every batch was really one 12,000-char request, and nothing logged
   the loss. The cap now comes from the caller's budget.
 
@@ -356,32 +387,31 @@ install cannot overwrite local work.
   | `maxTokens` | 4,000 | 16,000 | ~17 summaries per call |
   | `maxPassMs` | 180,000 | 600,000 | several batches fit |
 
-- **The panel exposes the two sizing knobs** (`单次输入上限`, `输出上限`) under a
-  collapsed 高级 section, so the common controls stay uncluttered. The timeout is
+- **The panel exposes the two sizing knobs** (`鍗曟杈撳叆涓婇檺`, `杈撳嚭涓婇檺`) under a
+  collapsed 楂樼骇 section, so the common controls stay uncluttered. The timeout is
   not exposed: it derives from the output budget, and setting it independently is
   how it got out of sync before.
 
 ### Notes
 
 Measured throughput is ~105 output tokens/sec, so a whole-session pass costs the
-same wall-clock time whether it runs as one call or several — token generation is
+same wall-clock time whether it runs as one call or several 鈥?token generation is
 serial. Batching buys a per-call output cap that fits and a smaller blast radius,
 not speed. Raising both knobs toward a whole-session call is supported.
 
-## [0.14.0] — 2026-11-22
+## [0.14.0] 鈥?2026-11-22
 
 ### Fixed
 
 - **The closing assistant reply is no longer compressed.** A turn ends with the
-  answer — what changed, what the result was, what comes next — and that reply was
+  answer 鈥?what changed, what the result was, what comes next 鈥?and that reply was
   inside the condensed span, so the next model read a paraphrase where it could
   read the real thing. The interval now stops before the trailing assistant
   messages and only the process above them is condensed.
 
   Measured on a real session: 91 intervals, every one now ends with a
-  `tool/result` and keeps its reply verbatim (e.g. "两个都装好了，
-  `application: applied`，无警告"). A turn with nothing but replies — a plain
-  question and answer — produces no interval at all, because there is no process
+  `tool/result` and keeps its reply verbatim (e.g. "涓や釜閮借濂戒簡锛?  `application: applied`锛屾棤璀﹀憡"). A turn with nothing but replies 鈥?a plain
+  question and answer 鈥?produces no interval at all, because there is no process
   to condense.
 
   The archive record still stores the full original, so the reply remains
@@ -402,27 +432,27 @@ Measured on one real pass (20 turns, 487,501 chars saved, 184s):
 | saves per later request | ~$0.09 |
 | break-even | ~2 requests |
 
-So a pass pays for itself within one tool-using turn — **provided the session
+So a pass pays for itself within one tool-using turn 鈥?**provided the session
 continues**. Compressing near the window limit and then ending the session spends
 the cost without using the saving. Repeated passes do not compound their benefit:
 the history is already small after the first one, so each later pass costs again
 while saving less.
 
-## [0.13.1] — 2026-11-22
+## [0.13.1] 鈥?2026-11-22
 
 Four problems found by auditing a running install instead of the source.
 
 ### Fixed
 
 - **A saved config silently overrode the new defaults.** `cordis.patch.yml`
-  stores what the panel last wrote, and those values win — so raising
+  stores what the panel last wrote, and those values win 鈥?so raising
   `maxInputChars` to 96,000 in code changed nothing on an install that had
   already saved 24,000. Batching was therefore still fitting one turn per call.
   Both the shipped config and the runtime fallbacks now agree, and a test pins
   the two together so a future default bump cannot drift again.
 
 - **A short session skipped compression without saying why.** With
-  `keepLast: 2`, a session with two turns produces zero eligible intervals — the
+  `keepLast: 2`, a session with two turns produces zero eligible intervals 鈥?the
   switch is on, pressure is over the threshold, and nothing happens. The log now
   distinguishes "no user turns yet" from "all turns are inside keepLast, N more
   needed".
@@ -440,30 +470,29 @@ Four problems found by auditing a running install instead of the source.
 - `stats.turns` is declared with the other counters instead of being added
   lazily, so a fresh panel shows `0` rather than nothing.
 
-## [0.13.0] — 2026-11-21
+## [0.13.0] 鈥?2026-11-21
 
 ### Changed
 
 - **Turns are condensed in batches: one model call per batch, not per turn.**
   A measured run compressed six turns in 51.7s across six separate calls. Most
-  of that is per-request overhead — system prompt, headers, round-trip — so
+  of that is per-request overhead 鈥?system prompt, headers, round-trip 鈥?so
   batching pays it once. Transcripts are grouped until the next would exceed
   `maxInputChars`, then sent as one numbered request answered with a JSON array.
 
-- **`maxInputChars` raised 24,000 → 96,000.** The first measurement made the
+- **`maxInputChars` raised 24,000 鈫?96,000.** The first measurement made the
   batch pointless: turn transcripts average ~21,600 chars on a real session, so a
   24,000 budget fit roughly one turn per call. At 96,000 the same 26 turns need 8
   calls instead of 26. The ceiling is the model's context window; a smaller-window
   model needs this lowered.
 
-- **`maxTokens` raised 1,200 → 4,000.** The reply budget now covers a whole batch.
+- **`maxTokens` raised 1,200 鈫?4,000.** The reply budget now covers a whole batch.
   At 1,200 a three-turn reply could be truncated mid-JSON, which fails parsing and
   loses every summary in that batch at once.
 
 - **`maxTurnsPerPass` removed.** It stopped a 180-second budget after 51 seconds.
   The time budget is what a user actually feels; a count on top of it only cuts
-  work short. `maxPassMs` is now exposed in the panel with a 60-second floor —
-  below that a slow route cannot finish even one batch, so a pass would never make
+  work short. `maxPassMs` is now exposed in the panel with a 60-second floor 鈥?  below that a slow route cannot finish even one batch, so a pass would never make
   progress.
 
 ### Robustness
@@ -479,16 +508,16 @@ Four problems found by auditing a running install instead of the source.
   shape, the removed turn cap, the 60-second floor, blank-slot tolerance, and the
   ratio semantics.
 
-## [0.12.2] — 2026-11-21
+## [0.12.2] 鈥?2026-11-21
 
 ### Changed
 
-- **Removed the explanatory prose from the 轮次压缩 section.** The subtitle and
+- **Removed the explanatory prose from the 杞鍘嬬缉 section.** The subtitle and
   the two-paragraph note described what the controls below them already make
   clear, and on a narrow panel they pushed the actual settings below the fold.
   The section is now its title, its switch, and its parameters.
 
-## [0.12.1] — 2026-11-21
+## [0.12.1] 鈥?2026-11-21
 
 ### Changed
 
@@ -499,7 +528,7 @@ Four problems found by auditing a running install instead of the source.
   summary at a fraction of the middle it replaces, with a 200-character floor so
   a tiny turn cannot produce an unusable stub.
 
-  **The shipped default is blank — no limit.** The prompt already asks for a
+  **The shipped default is blank 鈥?no limit.** The prompt already asks for a
   condensed record; letting the model decide how long that is beats truncating
   its answer at an arbitrary number. Set a ratio only when a predictable cost
   matters more than fidelity.
@@ -510,13 +539,13 @@ Four problems found by auditing a running install instead of the source.
   that the cap scales with the middle, and that the floor prevents a
   uselessly short result.
 
-## [0.12.0] — 2026-11-21
+## [0.12.0] 鈥?2026-11-21
 
 ### Added
 
-- **轮次压缩.** The plugin now condenses what the model *did* inside a turn:
-  everything between one user instruction and the next — reasoning, tool calls,
-  tool output, assistant replies — goes to the model as one transcript, and the
+- **杞鍘嬬缉.** The plugin now condenses what the model *did* inside a turn:
+  everything between one user instruction and the next 鈥?reasoning, tool calls,
+  tool output, assistant replies 鈥?goes to the model as one transcript, and the
   span is replaced by a single condensed block.
 
   The instruction itself is never part of the input, so **the user's own words
@@ -526,23 +555,22 @@ Four problems found by auditing a running install instead of the source.
 
 ### Changed
 
-- **思考压缩 removed.** Turn compression subsumes it: reasoning is now condensed
+- **鎬濊€冨帇缂?removed.** Turn compression subsumes it: reasoning is now condensed
   together with the tool calls around it, in context, instead of as an isolated
   fragment with no idea what task it served. The config key is still read and
   coerced off, so an existing setting cannot keep both passes running over the
   same content.
-- **工具输出剪枝 now mirrors the shipped pruner exactly** — 8192 / 4096 / 1024,
-  the same numbers `dsh-compaction-tool-result-pruner` uses — and stays off by
+- **宸ュ叿杈撳嚭鍓灊 now mirrors the shipped pruner exactly** 鈥?8192 / 4096 / 1024,
+  the same numbers `dsh-compaction-tool-result-pruner` uses 鈥?and stays off by
   default. It is a zero-cost first pass for repetitive output, not a feature of
   its own.
-- The cascade is now: tool trim (free) → turn compression (one call per turn) →
-  whole-history checkpoint (most expensive, last).
+- The cascade is now: tool trim (free) 鈫?turn compression (one call per turn) 鈫?  whole-history checkpoint (most expensive, last).
 
 ### Why the checkpoint is a `user/message`
 
 Two log rules are mutually exclusive: a replacement **must** cite every shadowed
 node, and `assistant/message` **may not** cite anything. An assistant
-replacement of a multi-node span is therefore impossible — verified against the
+replacement of a multi-node span is therefore impossible 鈥?verified against the
 packaged `dsh-session`, where it throws
 `assistant/message embeds its source stream`. The checkpoint is a
 `user/message` carrying a `[compact-arsenal turn summary]` prefix, and the
@@ -554,38 +582,38 @@ archive keeps the full original transcript so the source stays recoverable.
   context excluded), transcript content, the impossibility of an assistant
   replacement, and idempotence via the checkpoint marker.
 
-## [0.11.2] — 2026-11-21
+## [0.11.2] 鈥?2026-11-21
 
 ### Changed
 
 - **A collapsed fragment is now one character instead of a sentence.** Short
-  fragments used to become `[已省略 213 字，原文见会话日志]` — 19 characters of new
+  fragments used to become `[宸茬渷鐣?213 瀛楋紝鍘熸枃瑙佷細璇濇棩蹇梋` 鈥?19 characters of new
   text to save 194. Multiplied across hundreds of fragments that placeholder is
   itself a noticeable share of what the model reads, and it tells the reader
-  nothing the record header does not already say. They now collapse to `·`.
+  nothing the record header does not already say. They now collapse to `路`.
 
 ### Why not empty
 
 An empty replacement was the obvious next step and is the wrong one. The log
 accepts `content: []`, but the DeepSeek adapter converts text blocks with
-`block.text ? [{type:'text',…}] : []`, so empty text yields a `tool_result` with
-no parts — a provider-side rejection. That is the same class of failure that
+`block.text ? [{type:'text',鈥] : []`, so empty text yields a `tool_result` with
+no parts 鈥?a provider-side rejection. That is the same class of failure that
 corrupted sessions twice in this plugin's history (a replacement the log took but
 a later reader refused), so the marker is one character rather than none.
 
 ### Fixed
 
 - `alreadyRewritten` matched markers by substring, which cannot work for a
-  one-character marker: it would flag any prose containing `·`. A collapsed
+  one-character marker: it would flag any prose containing `路`. A collapsed
   fragment is now recognised by whole-string equality, so it is still skipped on
   the next pass while ordinary content is not.
 
 ### Added
 
 - `test/short-marker.test.mjs`: pins the one-character collapse, the non-blank
-  requirement, and that `·` inside normal text is not mistaken for a marker.
+  requirement, and that `路` inside normal text is not mistaken for a marker.
 
-## [0.11.1] — 2026-11-21
+## [0.11.1] 鈥?2026-11-21
 
 ### Fixed
 
@@ -593,7 +621,7 @@ a later reader refused), so the marker is one character rather than none.
   fragments totalling 1.09M chars. With `tools.mode: model` every one was queued
   for summarization, which needs roughly 91 model calls, while the 90-second pass
   budget covers about 28. Every turn hit the budget, reported `items=0`,
-  `failed=95`, and started over — so the backlog could never shrink.
+  `failed=95`, and started over 鈥?so the backlog could never shrink.
 
   Three changes address the different halves of that:
 
@@ -603,7 +631,7 @@ a later reader refused), so the marker is one character rather than none.
     item costs nothing and an unbounded loop would be the real risk.
   - **Batches fill by characters** (up to 24 items / 12000 chars) instead of a
     fixed 8, cutting the call count for a 760-fragment backlog from about 95 to
-    about 93 at the same cap — and letting a larger cap pay off properly.
+    about 93 at the same cap 鈥?and letting a larger cap pay off properly.
   - **A budget stop is progress, not failure.** It used to be recorded as a
     failure message, which made the panel read "failed 95 times, 0 compressed"
     after a pass that may well have compressed plenty. It now reports how many
@@ -621,10 +649,10 @@ a later reader refused), so the marker is one character rather than none.
   cannot quietly restore the fixed item cap or turn a budget stop back into a
   failure count.
 
-## [0.11.0] — 2026-11-14
+## [0.11.0] 鈥?2026-11-14
 
 Consolidates everything after the published `0.9.0`. Those intermediate numbers
-(0.9.1–0.10.0) were never released, so they are folded into this one: two
+(0.9.1鈥?.10.0) were never released, so they are folded into this one: two
 features justify a minor bump, and the fixes ride along in it.
 
 ### Added
@@ -633,13 +661,13 @@ features justify a minor bump, and the fixes ride along in it.
   evaluate its own threshold independently, so two model-backed sections sharing
   a ratio both fired on the same turn and each paid for its own summarization
   call even though the first had already relieved the pressure. The order is now
-  tools → reasoning → total, each re-measuring the session before deciding, so a
+  tools 鈫?reasoning 鈫?total, each re-measuring the session before deciding, so a
   cheap pass that brings the session back under pressure means the later,
   pricier passes never run. This mirrors the shipped pruner, which also trims and
   re-measures before considering a model call.
-- **检查更新 actually checks.** The button queries the npm registry from the Host
-  and reports one of four distinct states — checking, up to date, a newer version
-  exists, or cannot check — instead of being a disabled placeholder. Version
+- **妫€鏌ユ洿鏂?actually checks.** The button queries the npm registry from the Host
+  and reports one of four distinct states 鈥?checking, up to date, a newer version
+  exists, or cannot check 鈥?instead of being a disabled placeholder. Version
   comparison is numeric: `0.9.3` sorts before `0.10.0`, which a string comparison
   gets backwards. Prerelease tags are ignored, so a stable install is never
   offered a beta. The request is made server-side, so the panel does not contact
@@ -665,26 +693,25 @@ features justify a minor bump, and the fixes ride along in it.
   title.** The title lookup scanned backwards with a 4000-step cap, but the
   newest title can sit thousands of events behind the tail (one session's is at
   seq 839 with 7631 events after it), so the cap was always exhausted and every
-  name fell back to `session-<uuid>--…`. The lookup is one forward pass now, and
-  a session without a title gets `未命名对话` rather than an opaque id.
-- **打开目录 opened nothing.** explorer.exe returns immediately whatever happens
+  name fell back to `session-<uuid>--鈥. The lookup is one forward pass now, and
+  a session without a title gets `鏈懡鍚嶅璇漙 rather than an opaque id.
+- **鎵撳紑鐩綍 opened nothing.** explorer.exe returns immediately whatever happens
   and, when an explorer process is already running, hands the request to that
-  instance instead of opening a window — so spawning it directly reported success
+  instance instead of opening a window 鈥?so spawning it directly reported success
   while showing nothing. The launch goes through `cmd /c start` now, the same
   path double-clicking a folder takes.
 
 ### Changed
 
 - **Archive layout: identity moved from the file name to the directory.** The
-  shape is `<root>/<对话名>--<会话id>/<内容>--<方式>--<时间>--seq<N>.md`. The
+  shape is `<root>/<瀵硅瘽鍚?--<浼氳瘽id>/<鍐呭>--<鏂瑰紡>--<鏃堕棿>--seq<N>.md`. The
   directory states which conversation a record belongs to, once; the file names
   inside carry only what varies.
 - The panel states the execution order and the re-measurement rule, so "my tool
   threshold did not fire" has a visible answer.
 - **README rewritten around what a reader actually asks**: a one-line definition
   first, a quick start, the cascade documented as the core design, measured
-  before/after numbers per section instead of estimates, and a 「你可能担心的事」
-  section recording the real concerns — over-aggressive trimming, repeated model
+  before/after numbers per section instead of estimates, and a 銆屼綘鍙兘鎷呭績鐨勪簨銆?  section recording the real concerns 鈥?over-aggressive trimming, repeated model
   spend, prompt-cache invalidation, and the two log corruption incidents. A
   document that only lists upsides is marketing.
 
@@ -694,7 +721,7 @@ features justify a minor bump, and the fixes ride along in it.
   `test/readme.test.mjs` and the consolidated shape checks: 58 tests, all
   pinned against the packaged `dsh-session` where the behaviour is a log rule.
 
-## [0.9.0] — 2026-11-13
+## [0.9.0] 鈥?2026-11-13
 
 ### Fixed
 
@@ -703,8 +730,8 @@ features justify a minor bump, and the fixes ride along in it.
   `session/title` log events into the projection the sidebar renders. The plugin
   read `session.title` / `session.summary.title`, neither of which exists, so
   every record fell back to the opaque id. It now reads the logged title, so a
-  record is named `压缩--tools--model--…` rather than `session-5fd2…--tools--…`.
-- **打开目录 did nothing on a fresh install.** Nothing had been compressed yet,
+  record is named `鍘嬬缉--tools--model--鈥 rather than `session-5fd2鈥?-tools--鈥.
+- **鎵撳紑鐩綍 did nothing on a fresh install.** Nothing had been compressed yet,
   so the directory did not exist; and the launcher was spawned as a bare
   `explorer.exe`, which the subprocess service resolves against a scrubbed
   `PATH`. The directory is now created first and `explorer.exe` is addressed by
@@ -715,18 +742,18 @@ features justify a minor bump, and the fixes ride along in it.
 
 - **A log inside the plugin directory** (`logs/compact-arsenal.log`). Every pass
   writes the gate arithmetic that decided whether to run, then the candidates,
-  then the outcome — which is the only place that explains "why did nothing
+  then the outcome 鈥?which is the only place that explains "why did nothing
   happen". Writes are serialized and the file rotates once at 2 MB.
 - The archive and log directories now appear in the panel, and both follow the
   plugin wherever it is installed.
 
-## [0.8.1] — 2026-11-13
+## [0.8.1] 鈥?2026-11-13
 
 ### Fixed
 
 - **A model-backed pass could stall the whole reply.** The `agent/pre-step` hook
   awaited the rewrite, so one turn waited on every summarization call in
-  sequence — up to 12 items per section across two sections — before the model
+  sequence 鈥?up to 12 items per section across two sections 鈥?before the model
   was even asked to answer. With a provider that stops responding, the stream
   never finished and the turn showed no thinking, no tool calls and no reply.
   The rewrite now runs detached: the step proceeds immediately and the pass
@@ -746,13 +773,12 @@ features justify a minor bump, and the fixes ride along in it.
   yields one delta and then never finishes, and asserts the call returns.
 - `maxPassMs` for both sections in the defaults.
 
-## [0.8.0] — 2026-11-13
+## [0.8.0] 鈥?2026-11-13
 
 ### Added
 
-- **Model pickers backed by the live catalog.** 思考压缩 / 工具输出压缩 / 总压缩
-  now choose a provider and model from dropdowns fed by
-  `llm.listProviders()` + `llm.listModels()` — the same routes a chat model
+- **Model pickers backed by the live catalog.** 鎬濊€冨帇缂?/ 宸ュ叿杈撳嚭鍘嬬缉 / 鎬诲帇缂?  now choose a provider and model from dropdowns fed by
+  `llm.listProviders()` + `llm.listModels()` 鈥?the same routes a chat model
   selection offers. Picking a model also selects its provider, so the pair can
   never drift apart, and the empty choice keeps "follow the current session".
   A new `GET /compact-arsenal/api/models` route serves that catalog.
@@ -773,7 +799,7 @@ features justify a minor bump, and the fixes ride along in it.
 - `test/render-panel.mjs`: renders the panel with a stub React and asserts the
   three sections, the retention card, and that the removed copy stays removed.
 
-## [0.7.1] — 2026-11-12
+## [0.7.1] 鈥?2026-11-12
 
 ### Fixed
 
@@ -787,20 +813,20 @@ features justify a minor bump, and the fixes ride along in it.
 - Both call sites now build their payload through one `buildUserCheckpoint()`
   that supplies a traceable id (`compact-arsenal-<kind>-<seq>-<time>`), the
   current turn, and validates the result against the log's own four rules before
-  the append — a malformed checkpoint is refused rather than stored.
+  the append 鈥?a malformed checkpoint is refused rather than stored.
 
 ### Added
 
 - `test/checkpoint-shape.test.mjs`: an integration test against the packaged
   `dsh-session` that writes a checkpoint into a real log and re-checks it. It
   also records the mechanism behind the incident: a live `append` **accepts** an
-  id-less checkpoint, so the defect only surfaces on reload — which is why the
+  id-less checkpoint, so the defect only surfaces on reload 鈥?which is why the
   plugin's own guard, not the log, has to catch it.
 - Source assertions now cover the single construction path, the id, the
   pre-append shape validation, and the absence of any hand-rolled
   `user/message` append (22 checks).
 
-## [0.7.0] — 2026-11-12
+## [0.7.0] 鈥?2026-11-12
 
 ### Changed
 
@@ -808,12 +834,12 @@ features justify a minor bump, and the fixes ride along in it.
   from the module's own URL instead of `DSH_HOME`. The archive therefore travels
   with the plugin, no host path is baked in, and a read-only install falls back
   to `$DSH_HOME/compact-arsenal` without losing the record.
-- The archive location and its record count moved into the **压缩留存** card,
+- The archive location and its record count moved into the **鍘嬬缉鐣欏瓨** card,
   next to the switch that controls them, instead of sitting at the page bottom.
 
 ### Added
 
-- **打开目录** button in the 压缩留存 card: asks the Host to reveal the archive
+- **鎵撳紑鐩綍** button in the 鍘嬬缉鐣欏瓨 card: asks the Host to reveal the archive
   folder in the platform file manager. The path is resolved server-side, so the
   browser never supplies or learns a host path.
 
@@ -823,16 +849,16 @@ features justify a minor bump, and the fixes ride along in it.
   automatically" subtitle, the pressure readout row, and the safety-boundary
   footer.
 
-## [0.6.0] — 2026-11-11
+## [0.6.0] 鈥?2026-11-11
 
 ### Added
 
-- **压缩留存 switch.** Archiving can be turned off without touching the
+- **鍘嬬缉鐣欏瓨 switch.** Archiving can be turned off without touching the
   compression itself, so a machine that only needs the token savings stops
   writing files. Off means nothing touches disk.
 - **File names built for comparison.** A record is now named
-  `<对话名>--<内容>--<方式>--<时间>--seq<编号>.md`, e.g.
-  `WordCut-词剪--tools--model--20261111-214530--seq1234.md`. The conversation
+  `<瀵硅瘽鍚?--<鍐呭>--<鏂瑰紡>--<鏃堕棿>--seq<缂栧彿>.md`, e.g.
+  `WordCut-璇嶅壀--tools--model--20261111-214530--seq1234.md`. The conversation
   comes first so one session sorts together; the timestamp sorts chronologically
   in a plain directory listing; the node id makes a record traceable back to the
   log. The record body now also states the conversation title, the local time,
@@ -843,19 +869,19 @@ features justify a minor bump, and the fixes ride along in it.
 - Archiving reads the conversation title from the session when the Host exposes
   one, falling back to the session id.
 
-## [0.5.1] — 2026-11-11
+## [0.5.1] 鈥?2026-11-11
 
 Patch release: `0.5.0` was stranded in npm's staging queue (a publish returned
 `409 Cannot publish over previously staged version` while the staging list
 showed nothing), so the same code shipped under a fresh number.
 
-## [0.5.0] — 2026-11-11
+## [0.5.0] 鈥?2026-11-11
 
 ### Fixed
 
 - **Reasoning compression could never land on any published DSH release.**
   Reported in [#1](https://github.com/TacitSay/dsh-compact-arsenal/issues/1):
-  the log enforces two mutually exclusive rules on a surface replacement — every
+  the log enforces two mutually exclusive rules on a surface replacement 鈥?every
   shadowed node must be cited, and `assistant/message` may not cite anything.
   Rewriting an assistant node in place is therefore impossible, and every
   reasoning attempt failed with `missing <seq>` while its model call had already
@@ -875,7 +901,7 @@ showed nothing), so the same code shipped under a fresh number.
 - Source assertions now cover the reasoning shape, the whole-span citation, and
   the pre-flight check (17 checks).
 
-## [0.4.0] — 2026-11-11
+## [0.4.0] 鈥?2026-11-11
 
 ### Fixed
 
@@ -889,11 +915,11 @@ showed nothing), so the same code shipped under a fresh number.
 
 - **Version badge in the panel header** (`v0.4.0`), sourced from the running
   plugin rather than `package.json`, so a stale install is visible at a glance.
-- A disabled **检查更新** button beside it, reserving the seat for a future
+- A disabled **妫€鏌ユ洿鏂?* button beside it, reserving the seat for a future
   update check; the market owns package updates, so this stays inert until one
   exists.
 
-## [0.3.0] — 2026-11-11
+## [0.3.0] 鈥?2026-11-11
 
 ### Fixed
 
@@ -904,7 +930,7 @@ showed nothing), so the same code shipped under a fresh number.
   gap between turns and were rejected by the log loader on resume; the other 95
   slipped through while claiming a turn they did not belong to.
 - **Replacements carried the replaced node's turn.** `applyRewrittenText()` wrote
-  `turn: event.data.turn`, i.e. the turn the old node was created in — often
+  `turn: event.data.turn`, i.e. the turn the old node was created in 鈥?often
   dozens of turns earlier. The row now carries the turn that owns the write, and
   keeps the node's step only when both turns match.
 - **A cancelled step still wrote to the log.** `compressSection()` now checks
@@ -919,7 +945,7 @@ showed nothing), so the same code shipped under a fresh number.
 ### Removed
 
 - The unused single-item rewrite path (`rewriteAssistant*`, `rewriteToolResult*`,
-  `rebuildWithModel`) — dead code that carried the same stale-turn bug and could
+  `rebuildWithModel`) 鈥?dead code that carried the same stale-turn bug and could
   have been reintroduced by accident.
 
 ### Added
@@ -929,7 +955,7 @@ showed nothing), so the same code shipped under a fresh number.
 - `test/verify-fix.cjs`: asserts all of the above against the shipped source, so
   a regression fails a test rather than a user's session.
 
-## [0.2.1] — 2026-11-10
+## [0.2.1] 鈥?2026-11-10
 
 ### Fixed
 
@@ -939,18 +965,18 @@ showed nothing), so the same code shipped under a fresh number.
   characters per token, which undercounts CJK and JSON by about 12%: a session
   measured at 51.9% of its window was read as 45.4% and never tripped a 0.5
   threshold.
-- The panel shows both numbers (真实 / 估算) so a gate decision can be explained.
+- The panel shows both numbers (鐪熷疄 / 浼扮畻) so a gate decision can be explained.
 
 ### Added
 
 - `docs/threshold-notes.md`: a field record of one session, the exact crossing
   sample, every rewrite it produced, and the two measurement bases side by side.
 
-## [0.2.0] — 2026-11-03
+## [0.2.0] 鈥?2026-11-03
 
 ### Added
 
-- **Left-sidebar panel** (`上下文压缩`): per-section switches, method cards with
+- **Left-sidebar panel** (`涓婁笅鏂囧帇缂ー): per-section switches, method cards with
   check marks, editable parameters, debounced auto-save, live rewrite counters.
 - **Total compression** that runs on its own: replaces the oldest closed turns
   with a model-written checkpoint, keeping tool calls and results paired.
@@ -977,7 +1003,7 @@ showed nothing), so the same code shipped under a fresh number.
 - Model fields overlapping in the panel; they now use a grid layout.
 - Legacy `minChars: 2000` configs are migrated to the new per-fragment floor.
 
-## [0.1.0] — 2026-11-02
+## [0.1.0] 鈥?2026-11-02
 
 ### Added
 
@@ -985,3 +1011,4 @@ showed nothing), so the same code shipped under a fresh number.
 - Pure, dependency-free rewrite policy with unit tests.
 - Mechanical reasoning trimming (`truncate` / `clear`) and tool-output pruning,
   applied through surface replacement at a pressure threshold.
+

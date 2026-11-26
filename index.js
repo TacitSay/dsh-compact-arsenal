@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.19.0'
+export const PACKAGE_VERSION = '0.19.1'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -497,7 +497,7 @@ export function apply(ctx, rawConfig) {
        * `compressSection` refuses any append once the turn has closed, so running
        * detached cannot write into a finished turn.
        */
-      void rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
+      void rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure, lastSeen, totals)
         .catch((error) => {
           ctx.logger?.warn?.(`[compact-arsenal] rewrite skipped: ${error?.message ?? error}`)
         })
@@ -1300,9 +1300,16 @@ function transcriptLine(event) {
  * @param {any} config - normalized plugin config.
  * @param {{ agent: { id: string }, turn: number }} payload - pre-step payload.
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
+ * @param {any} stats - per-process counters.
+ * @param {{ root: string, lastPath: string | null }} archive - archive target.
+ * @param {any} pressure - last observed pressure inputs.
+ * @param {Map<string, { used: number, didCompress: boolean }>} lastSeen - previous
+ *   measurement per session, used to attribute a size change to its cause.
+ * @param {any} totals - lifetime counters, mutated in place so the panel can show
+ *   a cumulative figure that survives a restart.
  */
-function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure) {
-  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure)
+function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressure, lastSeen, totals) {
+  return rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure, lastSeen, totals)
 }
 
 /**
@@ -1312,9 +1319,14 @@ function rewrite(ctx, config, payload, lastProcessedTurn, stats, archive, pressu
  * @param {{ agent: { id: string }, turn: number, signal?: AbortSignal }} payload - pre-step payload.
  * @param {Map<string, number>} lastProcessedTurn - per-session guard.
  * @param {{ reasoning: number, tools: number, chars: number }} stats - live counters.
+ * @param {{ root: string, lastPath: string | null }} archive - archive target.
+ * @param {any} pressure - last observed pressure inputs.
+ * @param {Map<string, { used: number, didCompress: boolean }>} lastSeen - previous
+ *   measurement per session.
+ * @param {any} totals - lifetime counters, mutated in place.
  * @returns {Promise<void>} resolves when every rewrite of this turn landed.
  */
-async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure) {
+async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, archive, pressure, lastSeen, totals) {
   const session = ctx.sessions.get(payload.agent.id)
   if (session === undefined) return
 
@@ -1325,7 +1337,11 @@ async function rewriteAsync(ctx, config, payload, lastProcessedTurn, stats, arch
   pressure.estimated = snapshot.estimated
   pressure.window = session.requestContext?.()?.contextWindow ?? null
 
-  if (!config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
+  // Every section must be listed here. `turns` was added later and omitted, which
+  // meant a config with only turn compression enabled — the normal case, since the
+  // other three are retired — returned here on every turn and never logged a thing.
+  // The panel showed "no compression" with no way to tell why.
+  if (!config.turns.enabled && !config.total.enabled && !config.reasoning.enabled && !config.tools.enabled) return
 
   if (lastProcessedTurn.get(session.id) === payload.turn) return
 
