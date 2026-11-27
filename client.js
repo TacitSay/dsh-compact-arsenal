@@ -193,7 +193,16 @@ window.__ModuleLoader__.load({
           gridColumn: props.wide ? '1 / -1' : 'auto',
         },
       }, [
-        h('span', { key: 'l', style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } }, props.label),
+        h('span', {
+          key: 'l',
+          // `labelTitle` lets a caller move an explanation onto the label's tooltip
+          // instead of spending a permanent row on it.
+          ...(props.labelTitle === undefined ? {} : { title: props.labelTitle }),
+          style: {
+            fontSize: 11, color: MUTED, lineHeight: 1.4,
+            cursor: props.labelTitle === undefined ? 'default' : 'help',
+          },
+        }, props.label),
         props.children,
         props.hint
           ? h('span', { key: 'h', style: { fontSize: 10.5, color: MUTED, lineHeight: 1.4, opacity: 0.85 } }, props.hint)
@@ -229,7 +238,10 @@ window.__ModuleLoader__.load({
       return h(Field, {
         wide: true,
         label: '压缩模型',
-        hint: '留空表示跟随当前会话的模型；压缩只在触发时调用一次。',
+        // The explanation moved out of the visible hint and onto the label, where a
+        // reader who wants it can hover: it describes behaviour that is predictable
+        // once seen, so it does not need permanent space.
+        labelTitle: '留空表示跟随当前会话的模型；压缩只在触发时调用一次。',
       }, h('div', {
         style: {
           display: 'grid', gap: 8,
@@ -311,8 +323,19 @@ window.__ModuleLoader__.load({
           style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
         }, [
           h('div', { key: 't', style: { display: 'flex', flexDirection: 'column', gap: 2 } }, [
-            h('strong', { key: 'a', style: { fontSize: 14 } }, props.title),
-            h('span', { key: 'b', style: { fontSize: 11, color: MUTED } }, props.subtitle),
+            h('strong', {
+              key: 'a',
+              // `titleHint` carries an explanation as a hover tooltip on the heading,
+              // so it stays discoverable without occupying a row above the controls.
+              ...(props.titleHint === undefined ? {} : { title: props.titleHint }),
+              style: {
+                fontSize: 14,
+                cursor: props.titleHint === undefined ? 'default' : 'help',
+              },
+            }, props.title),
+            props.subtitle
+              ? h('span', { key: 'b', style: { fontSize: 11, color: MUTED } }, props.subtitle)
+              : null,
           ]),
           props.onToggle
             ? h(Switch, { key: 'sw', checked: props.enabled, onChange: props.onToggle, label: props.title })
@@ -367,6 +390,18 @@ window.__ModuleLoader__.load({
         },
       }
     }
+
+    /**
+     * The cascade order, as a hover tooltip rather than a paragraph.
+     *
+     * It answers "why did my tool threshold not fire" — because an earlier pass
+     * already brought the session down — but that is a question asked once, so it
+     * lives on the section heading instead of occupying a row above the controls.
+     *
+     * Module scope, not inside `Panel`: a constant rebuilt every render is wasted
+     * work, and defining it below its use is a temporal-dead-zone error.
+     */
+    const CASCADE_HINT = '执行顺序：工具输出 → 思考 → 总压缩。每一步结束后重新测量，压力已降到下一步阈值以下就停下——所以机械方式够用时不会调用模型。'
 
     function Panel() {
       const [config, setConfig] = useState(emptyConfig)
@@ -547,6 +582,7 @@ window.__ModuleLoader__.load({
       const turns = h(Section, {
         key: 'turns',
         title: '轮次压缩',
+        titleHint: CASCADE_HINT,
         enabled: config.turns.enabled,
         onToggle: (value) => setSection('turns', 'enabled', value),
       }, [
@@ -724,19 +760,6 @@ window.__ModuleLoader__.load({
           transition: 'opacity 120ms ease',
         },
       }, [total, turns, tools])
-
-      /**
-       * State the order out loud.
-       *
-       * The sections are listed cheapest-last in the code, but they run
-       * cheapest-FIRST, and each one re-measures before deciding. Saying so
-       * stops "why did my tool threshold not fire" from being a mystery: it did
-       * not fire because an earlier pass already brought the session down.
-       */
-      const cascadeNote = h('p', {
-        key: 'cascade',
-        style: { margin: 0, fontSize: 11, color: MUTED, lineHeight: 1.7 },
-      }, '执行顺序：工具输出 → 思考 → 总压缩。每一步结束后重新测量，压力已降到下一步阈值以下就停下——所以机械方式够用时不会调用模型。')
 
       const statsLine = h('div', {
         style: { display: 'flex', flexDirection: 'column', gap: 4 },
@@ -959,7 +982,7 @@ window.__ModuleLoader__.load({
           minHeight: '100%', boxSizing: 'border-box', overflow: 'auto', padding: '20px 24px',
           display: 'flex', flexDirection: 'column', gap: 16, color: 'inherit',
         },
-      }, [header, cascadeNote, sections, archiveCard, statsLine])
+      }, [header, sections, archiveCard, statsLine])
     }
 
     return {

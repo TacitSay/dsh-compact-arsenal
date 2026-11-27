@@ -16,6 +16,30 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.19.2] — 2026-11-27
+
+### Changed
+
+- **The cascade order no longer occupies a row.** It is now the tooltip of the
+  「轮次压缩」 heading. The sentence explained why a tool threshold can sit below
+  its mark without firing — an earlier, cheaper pass already brought the session
+  down — which is worth knowing once, not on every visit.
+
+- **The model picker's hint is a tooltip too.** "留空表示跟随当前会话的模型；压缩只在
+  触发时调用一次" sat under the two dropdowns; it now rides on the label.
+
+### Fixed
+
+- **`test/render-panel.mjs` was rendering an empty panel body.** Its `React.createElement`
+  double kept children on the element instead of in `props.children`, so every
+  component that reads `props.children` — every section, every field — rendered
+  nothing. The check passed anyway because titles come from `props.title`, which
+  hid the problem: 32 nodes were collected where there should be ~196, and no body
+  text or tooltip was ever inspected.
+
+  This matters beyond the test: it is the reason "no leftover prose" assertions
+  could pass while prose was still there.
+
 ## [0.19.1] — 2026-11-26
 
 ### Fixed
@@ -1011,4 +1035,5 @@ showed nothing), so the same code shipped under a fresh number.
 - Pure, dependency-free rewrite policy with unit tests.
 - Mechanical reasoning trimming (`truncate` / `clear`) and tool-output pruning,
   applied through surface replacement at a pressure threshold.
+
 
