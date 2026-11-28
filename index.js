@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.19.2'
+export const PACKAGE_VERSION = '0.19.3'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -125,8 +125,16 @@ export const DEFAULTS = Object.freeze({
   turns: {
     enabled: false,
     pressureRatio: 0.7,
-    /** Minimum middle size before a turn is worth condensing. */
-    minChars: 2000,
+    /**
+     * Minimum middle size before a turn is worth condensing.
+     *
+     * Calibrated from a real 102-turn session: the median middle was 1,645
+     * characters, so the old 2,000 cut 72% of eligible turns and left the pass
+     * reporting `items` far below `eligible`. At 1,000 the cutoff sits near the
+     * lower quartile, where a turn still carries a tool call or a file edit worth
+     * summarising, and a shorter one is mostly prose the reply already restates.
+     */
+    minChars: 1000,
     /** Never condense a turn whose instruction is more recent than this. */
     keepLast: 2,
     /**
@@ -982,12 +990,17 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
    * it, and it is why `maxInputChars` is worth raising for very large sessions.
    */
   const batches = []
+  let skippedCondensed = 0
+  let skippedTooSmall = 0
   let current = []
   let currentSize = 0
   for (const interval of eligible) {
-    if (isCondensedMiddle(session, interval)) continue
+    // Count the two ways a turn is dropped, instead of dropping it silently.
+    // Without these the pass reported `eligible=100 items=67` and nothing explained
+    // the missing 33 — a reader could only guess between "by design" and "broken".
+    if (isCondensedMiddle(session, interval)) { skippedCondensed += 1; continue }
     const middle = middleChars(session, interval.middleSeqs)
-    if (middle < minChars) continue
+    if (middle < minChars) { skippedTooSmall += 1; continue }
     // The model gets the closing reply too, even though it is NOT part of the
     // replaced span. It is the conclusion the process led to, so showing it is
     // what lets the model write a summary that agrees with the answer that stays
@@ -1116,6 +1129,10 @@ async function turnsPass(ctx, session, policy, currentTurn, signal, stats, archi
     chars,
     failed,
     archived,
+    // Both reasons a turn was dropped, so `eligible` reconciles against `items`.
+    // A reader who sees eligible=100 items=67 should be able to read the rest here.
+    skippedCondensed,
+    skippedTooSmall,
     // How many turns kept their closing reply verbatim. This is the property that
     // makes the result readable later, so it is worth recording per pass.
     keptReplies: intervals.reduce((n, iv) => n + (iv.keepSeqs.length > 0 ? 1 : 0), 0),

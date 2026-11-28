@@ -16,6 +16,33 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.19.3] — 2026-11-28
+
+### Fixed
+
+- **A pass no longer drops turns silently.** `turns pass end` used to report
+  `eligible=100 items=67` and leave the other 33 unexplained: two `continue`
+  statements — already condensed, and below `minChars` — logged nothing, so a
+  reader could not tell "skipped by design" from "broken". Both are now counted
+  and reported beside `items`, so `eligible` reconciles.
+
+- **`minChars` default 2000 → 1000.** Measured against a real 102-turn session, the
+  median turn middle is 1,645 characters; 2,000 therefore cut 72% of eligible
+  turns. 1,000 sits near the lower quartile, where a turn still carries a tool call
+  or file edit worth summarising.
+
+### Verified
+
+Turn compression removes **no** user instruction. Checked against
+`sourceEventSeqs` — the field DSH validates as covering every shadowed node — across
+a session with 128 instructions and 4,897 shadowed nodes: turn compression removed 0,
+total compression removed 14 (its purpose), DSH itself removed 6. A 72% context drop
+is real, not damage.
+
+Note: `startSeq`/`endSeq` are surface **positions**, not a seq range, so
+`endSeq - startSeq` is meaningless as a span — it can even be negative. Any audit must
+read `sourceEventSeqs`.
+
 ## [0.19.2] — 2026-11-27
 
 ### Changed
@@ -1035,5 +1062,6 @@ showed nothing), so the same code shipped under a fresh number.
 - Pure, dependency-free rewrite policy with unit tests.
 - Mechanical reasoning trimming (`truncate` / `clear`) and tool-output pruning,
   applied through surface replacement at a pressure threshold.
+
 
 
