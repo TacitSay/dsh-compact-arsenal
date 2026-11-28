@@ -45,7 +45,7 @@ export const name = 'compact-arsenal'
  * Bumped in lockstep with `package.json` so the panel can show which build is
  * actually running — a stale install is otherwise invisible.
  */
-export const PACKAGE_VERSION = '0.19.3'
+export const PACKAGE_VERSION = '0.19.4'
 
 /** The published package to compare against; empty disables the update check. */
 export const PACKAGE_NAME = 'dsh-compact-arsenal'
@@ -1299,7 +1299,14 @@ function transcriptLine(event) {
   const role = event.type === 'user/message' ? 'USER'
     : event.type === 'assistant/message' ? 'ASSISTANT'
       : event.type === 'tool/result' ? 'TOOL' : 'CONTEXT'
-  const blocks = event.data?.message?.content
+  // `user/message` carries its blocks directly on `data.content`; `assistant/message`
+  // and `tool/result` nest a message at `data.message.content`. Reading only the
+  // nested path made every USER line come out as "[USER] " — the total summarizer was
+  // asked to condense a conversation whose instructions it could not see, and duly
+  // reported "no explicit user instruction" over a span that held several.
+  const blocks = Array.isArray(event.data?.content)
+    ? event.data.content
+    : event.data?.message?.content
   const text = Array.isArray(blocks)
     ? blocks.map((block) => {
       if (typeof block?.text === 'string') return block.text
@@ -1545,7 +1552,11 @@ function sectionMarker(kind, fromModel) {
  * @returns {string} concatenated text, or '' when the event carries none.
  */
 function sectionText(event, kind) {
-  const blocks = event.data?.message?.content
+  // Same two-level lookup as {@link transcriptLine}: assistant and tool events nest
+  // their message, a user event carries its blocks directly.
+  const blocks = Array.isArray(event.data?.message?.content)
+    ? event.data.message.content
+    : event.data?.content
   if (!Array.isArray(blocks)) return ''
   const wanted = kind === 'tools' ? 'text' : 'reasoning'
   return blocks.filter((block) => block?.type === wanted)

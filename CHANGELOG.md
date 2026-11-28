@@ -16,6 +16,29 @@ Since the project is still `0.y.z`, everything is allowed to change, but the
 same discipline applies: a release is a decision, not a byproduct of finishing a
 task.
 
+## [0.19.4] — 2026-11-28
+
+### Fixed
+
+- **The total summarizer could not see a single user instruction.** `transcriptLine`
+  read `data.message.content` only. That is correct for `assistant/message` and
+  `tool/result`, which nest a message, but `user/message` carries its blocks directly
+  on `data.content` — so every USER line was emitted as `[USER] ` with no body.
+
+  Measured on a real session: **128 instructions in, 128 empty lines out.** The
+  summarizer was asked to condense a conversation whose instructions were blank, and
+  the first live checkpoint said 「会话中未见用户显式指令」 over a span holding seven
+  of them. It also explained the checkpoint's opening line, "This is an automatically
+  generated checkpoint", being the only accurate part of its framing.
+
+  `sectionText` had the same single-level read; both now try the nested path first
+  and fall back to the flat one.
+
+### Verified
+
+All 128 instructions render with their text after the fix; assistant and tool results
+were unaffected (0 of 2,501 and 6 of 2,655 empty, the six being legitimately empty).
+
 ## [0.19.3] — 2026-11-28
 
 ### Fixed
@@ -1062,6 +1085,7 @@ showed nothing), so the same code shipped under a fresh number.
 - Pure, dependency-free rewrite policy with unit tests.
 - Mechanical reasoning trimming (`truncate` / `clear`) and tool-output pruning,
   applied through surface replacement at a pressure threshold.
+
 
 
 
